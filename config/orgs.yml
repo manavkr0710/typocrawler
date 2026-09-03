@@ -1,0 +1,19 @@
+# Target organisations for the typo crawl.
+#
+# `defaults` apply to every org; each org entry may override any of them.
+# Run `typocrawler orgs` to see the resolved list.
+
+defaults:
+  min_stars: 0            # skip repos with fewer stars than this
+  include_forks: false
+  include_archived: false
+  extra_paths: []         # additional markdown files to scan later, e.g. ["CONTRIBUTING.md"]
+
+orgs:
+  - login: google
+  - login: microsoft
+  - login: facebook       # Meta
+  - login: aws            # Amazon Web Services
+  - login: kubernetes
+  - login: netflix
+  - login: apple
