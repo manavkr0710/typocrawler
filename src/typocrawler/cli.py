@@ -6,6 +6,7 @@ are live now.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 import typer
@@ -65,8 +66,16 @@ def discover(
         envvar="GITHUB_TOKEN",
         help="GitHub personal access token (public-repo read scope).",
     ),
+    workers: int = typer.Option(
+        4, min=1, max=8, help="How many orgs to fetch concurrently."
+    ),
 ) -> None:
-    """Enumerate org repositories into the database."""
+    """Enumerate org repositories into the database.
+
+    Orgs are fetched concurrently (each org's own pages are still sequential — GraphQL
+    pagination is cursor-based). Each org is committed to the database as soon as its fetch
+    completes, so an interrupted run keeps whatever it already finished.
+    """
     cfg = load_config(config)
     engine = init_db(db)
 
@@ -79,27 +88,36 @@ def discover(
     started_at = datetime.now(UTC)
     total_seen = total_kept = 0
 
-    with client, engine.begin() as conn:
-        for org in cfg.resolved():
-            org_id = upsert_org(conn, org.login)
-            try:
-                records = list(iter_org_repos(client, org.login))
-            except GitHubError as exc:
-                typer.secho(f"{org.login}: {exc}", fg=typer.colors.YELLOW)
-                continue
-            kept = [r for r in records if should_keep(r, org)]
-            upsert_repos(conn, org_id, kept)
-            total_seen += len(records)
-            total_kept += len(kept)
-            typer.echo(f"{org.login:<16} kept {len(kept)}/{len(records)} repos")
+    def _fetch(org):
+        try:
+            return org, list(iter_org_repos(client, org.login)), None
+        except GitHubError as exc:
+            return org, None, exc
 
-        record_crawl_run(
-            conn,
-            started_at=started_at,
-            finished_at=datetime.now(UTC),
-            repos_scanned=total_kept,
-            api_points_used=client.points_used,
-        )
+    with client:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_fetch, org) for org in cfg.resolved()]
+            for future in as_completed(futures):
+                org, records, err = future.result()
+                if err is not None:
+                    typer.secho(f"{org.login}: {err}", fg=typer.colors.YELLOW)
+                    continue
+                kept = [r for r in records if should_keep(r, org)]
+                with engine.begin() as conn:
+                    org_id = upsert_org(conn, org.login)
+                    upsert_repos(conn, org_id, kept)
+                total_seen += len(records)
+                total_kept += len(kept)
+                typer.echo(f"{org.login:<16} kept {len(kept)}/{len(records)} repos")
+
+        with engine.begin() as conn:
+            record_crawl_run(
+                conn,
+                started_at=started_at,
+                finished_at=datetime.now(UTC),
+                repos_scanned=total_kept,
+                api_points_used=client.points_used,
+            )
 
     typer.secho(
         f"discovered {total_kept} repos ({total_seen} seen, {client.points_used} API points used)",
