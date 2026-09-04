@@ -6,11 +6,16 @@ are live now.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import typer
 
 from typocrawler import __version__
 from typocrawler.config import DEFAULT_CONFIG_PATH, load_config
 from typocrawler.db import DEFAULT_DB_PATH, init_db
+from typocrawler.db.repo_store import record_crawl_run, upsert_org, upsert_repos
+from typocrawler.github.client import GitHubClient, GitHubError
+from typocrawler.github.discover import iter_org_repos, should_keep
 
 app = typer.Typer(
     add_completion=False,
@@ -53,11 +58,53 @@ def _not_yet(name: str, stint: int) -> None:
 
 @app.command()
 def discover(
-    config: str = typer.Option(str(DEFAULT_CONFIG_PATH)),
-    db: str = typer.Option(str(DEFAULT_DB_PATH)),
+    config: str = typer.Option(str(DEFAULT_CONFIG_PATH), help="Path to the org config file."),
+    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to write into."),
+    token: str | None = typer.Option(
+        None,
+        envvar="GITHUB_TOKEN",
+        help="GitHub personal access token (public-repo read scope).",
+    ),
 ) -> None:
     """Enumerate org repositories into the database."""
-    _not_yet("discover", 2)
+    cfg = load_config(config)
+    engine = init_db(db)
+
+    try:
+        client = GitHubClient(token)
+    except GitHubError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    started_at = datetime.now(UTC)
+    total_seen = total_kept = 0
+
+    with client, engine.begin() as conn:
+        for org in cfg.resolved():
+            org_id = upsert_org(conn, org.login)
+            try:
+                records = list(iter_org_repos(client, org.login))
+            except GitHubError as exc:
+                typer.secho(f"{org.login}: {exc}", fg=typer.colors.YELLOW)
+                continue
+            kept = [r for r in records if should_keep(r, org)]
+            upsert_repos(conn, org_id, kept)
+            total_seen += len(records)
+            total_kept += len(kept)
+            typer.echo(f"{org.login:<16} kept {len(kept)}/{len(records)} repos")
+
+        record_crawl_run(
+            conn,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+            repos_scanned=total_kept,
+            api_points_used=client.points_used,
+        )
+
+    typer.secho(
+        f"discovered {total_kept} repos ({total_seen} seen, {client.points_used} API points used)",
+        fg=typer.colors.GREEN,
+    )
 
 
 @app.command()
