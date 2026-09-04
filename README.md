@@ -25,11 +25,16 @@ Full architecture, including C4 diagrams and the SQLite-vs-Postgres rationale, i
 
 ```bash
 pip install -e ".[dev]"
+cp .env.example .env             # then fill in GITHUB_TOKEN
 
 typocrawler init-db              # create the SQLite schema (typos.db)
 typocrawler orgs                 # show the resolved target org list
-typocrawler discover             # (stint 2) enumerate org repos
+typocrawler discover             # enumerate org repos (needs GITHUB_TOKEN)
 ```
+
+`GITHUB_TOKEN` is read from `.env` automatically (gitignored, never commit it), or from a real
+environment variable, or via `--token`. A fine-grained PAT with "Public Repositories (read-only)"
+access is enough — see [`.env.example`](.env.example).
 
 Configure targets in [`config/orgs.yml`](config/orgs.yml).
 

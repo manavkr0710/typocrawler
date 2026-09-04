@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any
 
 import httpx
@@ -29,7 +30,11 @@ def _is_retryable(exc: BaseException) -> bool:
 
 
 class GitHubClient:
-    """A GraphQL client for the GitHub API, authenticated with a personal access token."""
+    """A GraphQL client for the GitHub API, authenticated with a personal access token.
+
+    Safe to share across threads: ``httpx.Client`` handles concurrent requests, and
+    ``points_used`` is updated under a lock.
+    """
 
     def __init__(self, token: str | None = None, *, timeout: float = 30.0) -> None:
         token = token or os.environ.get("GITHUB_TOKEN")
@@ -47,6 +52,7 @@ class GitHubClient:
             timeout=timeout,
         )
         self.points_used = 0
+        self._points_lock = threading.Lock()
 
     def __enter__(self) -> GitHubClient:
         return self
@@ -73,5 +79,6 @@ class GitHubClient:
         data: dict[str, Any] = payload["data"]
         cost = (data.get("rateLimit") or {}).get("cost")
         if cost:
-            self.points_used += cost
+            with self._points_lock:
+                self.points_used += cost
         return data
