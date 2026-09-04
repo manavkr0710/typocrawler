@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 import typer
+from dotenv import load_dotenv
 
 from typocrawler import __version__
 from typocrawler.config import DEFAULT_CONFIG_PATH, load_config
@@ -17,6 +18,8 @@ from typocrawler.db import DEFAULT_DB_PATH, init_db
 from typocrawler.db.repo_store import record_crawl_run, upsert_org, upsert_repos
 from typocrawler.github.client import GitHubClient, GitHubError
 from typocrawler.github.discover import iter_org_repos, should_keep
+
+load_dotenv()  # pulls GITHUB_TOKEN (etc.) from a .env file in cwd/a parent dir, if present
 
 app = typer.Typer(
     add_completion=False,
