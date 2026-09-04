@@ -39,17 +39,21 @@ Configure targets in [`config/orgs.yml`](config/orgs.yml).
 |---|---|
 | `config/orgs.yml` | Target orgs + per-org overrides |
 | `src/typocrawler/config.py` | Config schema and loader |
-| `src/typocrawler/db/` | SQLAlchemy Core schema + engine |
+| `src/typocrawler/db/` | SQLAlchemy Core schema + engine + upsert layer |
+| `src/typocrawler/github/` | GitHub GraphQL client + repo discovery |
 | `src/typocrawler/cli.py` | `typocrawler` CLI (Typer) |
 | `migrations/` | Alembic migrations |
 | `tests/` | pytest suite |
+
+Discovery needs a GitHub token: `export GITHUB_TOKEN=ghp_...` (public-repo read scope is enough),
+then `typocrawler discover`.
 
 ## Build status
 
 Built in sequential "stints", one branch/PR each:
 
 - [x] **Stint 1 — skeleton:** tooling, config, DB schema, CLI stubs
-- [ ] Stint 2 — repo discovery (GitHub GraphQL)
+- [x] **Stint 2 — repo discovery:** GitHub GraphQL client, pagination, filtering, DB upserts
 - [ ] Stint 3 — README fetch + text extraction
 - [ ] Stint 4 — spell-checkers
 - [ ] Stint 5 — heuristic filter
