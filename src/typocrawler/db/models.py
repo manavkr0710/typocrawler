@@ -55,6 +55,7 @@ repos = Table(
     Column("readme_path", String),
     Column("readme_blob_sha", String),
     Column("readme_etag", String),
+    Column("readme_checked_at", DateTime(timezone=True)),
     Column("last_checked_at", DateTime(timezone=True)),
 )
 

@@ -30,7 +30,11 @@ cp .env.example .env             # then fill in GITHUB_TOKEN
 typocrawler init-db              # create the SQLite schema (typos.db)
 typocrawler orgs                 # show the resolved target org list
 typocrawler discover             # enumerate org repos (needs GITHUB_TOKEN)
+typocrawler fetch                # pull READMEs + extract prose (resumable, --limit N)
 ```
+
+If you have an existing `typos.db` from before Stint 3, run `alembic upgrade head` once to add
+the new column.
 
 `GITHUB_TOKEN` is read from `.env` automatically (gitignored, never commit it), or from a real
 environment variable, or via `--token`. A fine-grained PAT with "Public Repositories (read-only)"
@@ -59,7 +63,7 @@ Built in sequential "stints", one branch/PR each:
 
 - [x] **Stint 1 — skeleton:** tooling, config, DB schema, CLI stubs
 - [x] **Stint 2 — repo discovery:** GitHub GraphQL client, pagination, filtering, DB upserts
-- [ ] Stint 3 — README fetch + text extraction
+- [x] **Stint 3 — README fetch + extraction:** ETag-cached REST fetch, resumable, markdown → prose
 - [ ] Stint 4 — spell-checkers
 - [ ] Stint 5 — heuristic filter
 - [ ] Stint 6 — LLM verification
