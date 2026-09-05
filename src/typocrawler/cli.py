@@ -6,18 +6,24 @@ are live now.
 
 from __future__ import annotations
 
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
+import httpx
 import typer
 from dotenv import load_dotenv
+from sqlalchemy import update
 
 from typocrawler import __version__
 from typocrawler.config import DEFAULT_CONFIG_PATH, load_config
-from typocrawler.db import DEFAULT_DB_PATH, init_db
+from typocrawler.db import DEFAULT_DB_PATH, init_db, repos
 from typocrawler.db.repo_store import record_crawl_run, upsert_org, upsert_repos
-from typocrawler.github.client import GitHubClient, GitHubError
+from typocrawler.db.snapshot_store import repos_needing_readme, save_readme_snapshot
+from typocrawler.github.client import GitHubClient, GitHubError, GitHubRateLimitError
 from typocrawler.github.discover import iter_org_repos, should_keep
+from typocrawler.github.fetch import fetch_readme
+from typocrawler.text.extract import extract_prose
 
 load_dotenv()  # pulls GITHUB_TOKEN (etc.) from a .env file in cwd/a parent dir, if present
 
@@ -128,10 +134,106 @@ def discover(
     )
 
 
+def _persist_readme(conn, row, result) -> None:
+    now = datetime.now(UTC)
+    if result.status == "fetched":
+        save_readme_snapshot(
+            conn,
+            row.id,
+            blob_sha=result.blob_sha,
+            raw_md=result.raw_md,
+            extracted_text=extract_prose(result.raw_md),
+        )
+        conn.execute(
+            update(repos)
+            .where(repos.c.id == row.id)
+            .values(
+                readme_path=result.path,
+                readme_blob_sha=result.blob_sha,
+                readme_etag=result.etag,
+                readme_checked_at=now,
+                last_checked_at=now,
+            )
+        )
+    else:
+        conn.execute(
+            update(repos)
+            .where(repos.c.id == row.id)
+            .values(readme_checked_at=now, last_checked_at=now)
+        )
+
+
 @app.command()
-def fetch(db: str = typer.Option(str(DEFAULT_DB_PATH))) -> None:
-    """Fetch README blobs for known repositories (ETag-cached)."""
-    _not_yet("fetch", 3)
+def fetch(
+    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read/write."),
+    token: str | None = typer.Option(None, envvar="GITHUB_TOKEN", help="GitHub token."),
+    limit: int = typer.Option(300, help="Max repos to fetch this run (0 = all remaining)."),
+    workers: int = typer.Option(6, min=1, max=10, help="Concurrent README fetches."),
+) -> None:
+    """Fetch README files for discovered repos and extract their prose.
+
+    Resumable: only repos without a README snapshot are fetched, so re-running continues where
+    the last run stopped. Conditional (ETag) requests mean unchanged READMEs cost nothing.
+    """
+    engine = init_db(db)
+    try:
+        client = GitHubClient(token)
+    except GitHubError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    with engine.begin() as conn:
+        todo = list(repos_needing_readme(conn, limit=limit or None))
+    if not todo:
+        typer.secho("no repos need a README fetch — all caught up", fg=typer.colors.GREEN)
+        return
+
+    started_at = datetime.now(UTC)
+    counts: Counter[str] = Counter()
+    stopped = False
+
+    def _work(row):
+        try:
+            return row, fetch_readme(client, row.full_name, etag=row.readme_etag), None
+        except GitHubRateLimitError:
+            raise
+        except (GitHubError, httpx.HTTPStatusError) as exc:
+            return row, None, exc
+
+    with client, ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_work, r) for r in todo]
+        for future in as_completed(futures):
+            try:
+                row, result, err = future.result()
+            except GitHubRateLimitError as exc:
+                stopped = True
+                typer.secho(
+                    f"\n{exc} — re-run `typocrawler fetch` after that.", fg=typer.colors.YELLOW
+                )
+                for f in futures:
+                    f.cancel()
+                break
+            if err is not None:
+                counts["error"] += 1
+                typer.secho(f"  {row.full_name}: {err}", fg=typer.colors.YELLOW)
+                continue
+            with engine.begin() as conn:
+                _persist_readme(conn, row, result)
+            counts[result.status] += 1
+            if sum(counts.values()) % 25 == 0:
+                typer.echo(f"  {sum(counts.values())}/{len(todo)}  {dict(counts)}")
+
+    with engine.begin() as conn:
+        record_crawl_run(
+            conn,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+            repos_scanned=sum(counts.values()),
+            api_points_used=0,
+        )
+
+    colour = typer.colors.YELLOW if stopped else typer.colors.GREEN
+    typer.secho(f"fetch done: {dict(counts)}", fg=colour)
 
 
 @app.command()
