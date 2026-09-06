@@ -68,6 +68,7 @@ readme_snapshots = Table(
     Column("fetched_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("raw_md", Text, nullable=False),
     Column("extracted_text", Text, nullable=False),
+    Column("checked_at", DateTime(timezone=True)),
     UniqueConstraint("repo_id", "blob_sha", name="uq_snapshot_repo_blob"),
 )
 

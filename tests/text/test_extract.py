@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from typocrawler.text.extract import extract_prose
+from typocrawler.text.extract import extract_lines, extract_prose
 
 FENCED = """Some intro text.
 
@@ -53,3 +53,12 @@ def test_real_typos_survive_extraction():
     assert "prokect" in out
     assert "hepls" in out
     assert "managae" in out
+
+
+def test_extract_lines_maps_to_source_line_numbers():
+    md = "# Title\n\n```\ncode teh\n```\n\nProse with recieve here.\n"
+    lines = extract_lines(md)
+    assert lines[0] == (1, "Title")
+    # the prose paragraph starts on source line 7, past the fenced code block
+    assert lines[1][0] == 7
+    assert "recieve" in lines[1][1]

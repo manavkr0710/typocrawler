@@ -20,6 +20,8 @@ dependencies = [
     "tenacity>=8.5",
     "python-dotenv>=1.0",
     "markdown-it-py>=3.0",
+    "codespell>=2.3",
+    "typos>=1.29",
 ]
 
 [project.optional-dependencies]
