@@ -15,12 +15,12 @@ from pathlib import Path
 import httpx
 import typer
 from dotenv import load_dotenv
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from typocrawler import __version__
 from typocrawler.check.spell import crossref, run_codespell, run_typos
 from typocrawler.config import DEFAULT_CONFIG_PATH, load_config
-from typocrawler.db import DEFAULT_DB_PATH, init_db, repos
+from typocrawler.db import DEFAULT_DB_PATH, findings, init_db, repos
 from typocrawler.db.finding_store import (
     FindingRow,
     mark_checked,
@@ -245,24 +245,8 @@ def fetch(
     typer.secho(f"fetch done: {dict(counts)}", fg=colour)
 
 
-@app.command()
-def check(
-    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read/write."),
-    limit: int = typer.Option(0, help="Max READMEs to check this run (0 = all remaining)."),
-) -> None:
-    """Run codespell + typos over fetched READMEs and record candidate typos.
-
-    Resumable: only snapshots not yet checked are processed. The checkers run on the stripped
-    prose, but each finding's line number points back to the original README.
-    """
-    engine = init_db(db)
-    with engine.begin() as conn:
-        snaps = list(snapshots_to_check(conn, limit=limit or None))
-    if not snaps:
-        typer.secho("no READMEs need checking — all caught up", fg=typer.colors.GREEN)
-        return
-
-    started_at = datetime.now(UTC)
+def _check_batch(snaps) -> tuple[list[FindingRow], int]:
+    """Run both checkers over one batch of snapshots and build finding rows."""
     # file_key -> (repo_id, blob_sha, [(source_line, prose), ...])
     index: dict[str, tuple[int, str, list[tuple[int, str]]]] = {}
 
@@ -298,24 +282,98 @@ def check(
                 heuristic_score=hit.score,
             )
         )
+    return rows, sum(1 for h in merged if h.source == "both")
+
+
+@app.command()
+def check(
+    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read/write."),
+    limit: int = typer.Option(0, help="Max READMEs to check this run (0 = all remaining)."),
+    batch: int = typer.Option(250, min=1, help="READMEs per batch; each batch is committed."),
+) -> None:
+    """Run codespell + typos over fetched READMEs and record candidate typos.
+
+    Resumable: only snapshots not yet checked are processed, and each batch is committed as it
+    finishes — an interrupted run keeps its completed batches. The checkers run on the stripped
+    prose, but each finding's line number points back to the original README.
+    """
+    engine = init_db(db)
+    with engine.begin() as conn:
+        snaps = list(snapshots_to_check(conn, limit=limit or None))
+    if not snaps:
+        typer.secho("no READMEs need checking — all caught up", fg=typer.colors.GREEN)
+        return
+
+    started_at = datetime.now(UTC)
+    total_findings = total_both = 0
+
+    for start in range(0, len(snaps), batch):
+        chunk = snaps[start : start + batch]
+        rows, both = _check_batch(chunk)
+        with engine.begin() as conn:
+            written = upsert_findings(conn, rows)
+            mark_checked(conn, [s.id for s in chunk])
+        total_findings += written
+        total_both += both
+        typer.echo(
+            f"  {min(start + batch, len(snaps))}/{len(snaps)} READMEs  (+{written} findings)"
+        )
 
     with engine.begin() as conn:
-        written = upsert_findings(conn, rows)
-        mark_checked(conn, [s.id for s in snaps])
         record_crawl_run(
             conn,
             started_at=started_at,
             finished_at=datetime.now(UTC),
             repos_scanned=len(snaps),
             api_points_used=0,
-            findings_new=written,
+            findings_new=total_findings,
         )
 
-    both = sum(1 for h in merged if h.source == "both")
     typer.secho(
-        f"checked {len(snaps)} READMEs -> {written} findings ({both} flagged by both checkers)",
+        f"checked {len(snaps)} READMEs -> {total_findings} findings "
+        f"({total_both} flagged by both checkers)",
         fg=typer.colors.GREEN,
     )
+
+
+@app.command("findings")
+def findings_cmd(
+    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read."),
+    limit: int = typer.Option(50, help="Max rows to show."),
+    source: str = typer.Option("", help="Filter by source: codespell, typos, both."),
+    org: str = typer.Option("", help="Filter by org login, e.g. google."),
+) -> None:
+    """Print recorded typo findings, highest-confidence first."""
+    engine = init_db(db)
+    stmt = (
+        select(
+            repos.c.full_name,
+            findings.c.line_no,
+            findings.c.token,
+            findings.c.suggestion,
+            findings.c.source,
+            findings.c.context_snippet,
+        )
+        .select_from(findings.join(repos, findings.c.repo_id == repos.c.id))
+        .order_by(findings.c.heuristic_score.desc(), repos.c.full_name)
+        .limit(limit)
+    )
+    if source:
+        stmt = stmt.where(findings.c.source == source)
+    if org:
+        stmt = stmt.where(repos.c.full_name.like(f"{org}/%"))
+
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).all()
+
+    if not rows:
+        typer.secho("no findings match", fg=typer.colors.YELLOW)
+        return
+    for r in rows:
+        typer.secho(f"{r.source:9} ", fg=typer.colors.CYAN, nl=False)
+        typer.echo(f"{r.full_name}:{r.line_no}  {r.token} -> {r.suggestion}")
+        typer.secho(f"    {r.context_snippet[:100]}", fg=typer.colors.BRIGHT_BLACK)
+    typer.echo(f"\n{len(rows)} shown")
 
 
 @app.command()

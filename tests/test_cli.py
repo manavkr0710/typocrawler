@@ -176,3 +176,57 @@ def test_check_reports_when_nothing_to_do(tmp_path):
     result = runner.invoke(app, ["check", "--db", str(db)])
     assert result.exit_code == 0
     assert "all caught up" in result.stdout
+
+
+def test_check_commits_each_batch(tmp_path):
+    db = tmp_path / "typos.db"
+    engine = init_db(db)
+    with engine.begin() as conn:
+        org_id = upsert_org(conn, "acme")
+        upsert_repos(
+            conn,
+            org_id,
+            [RepoRecord(f"acme/r{i}", "main", 0, False, False, None) for i in range(3)],
+        )
+        for i, repo_id in enumerate(
+            conn.execute(select(repos_table.c.id).order_by(repos_table.c.id)).scalars()
+        ):
+            save_readme_snapshot(
+                conn,
+                repo_id,
+                blob_sha=f"sha{i}",
+                raw_md=f"# R{i}\n\nThis has a recieve typo.\n",
+                extracted_text="x",
+            )
+
+    result = runner.invoke(app, ["check", "--db", str(db), "--batch", "1"])
+    assert result.exit_code == 0, result.stdout
+    assert "1/3 READMEs" in result.stdout  # per-batch progress line
+    assert "3/3 READMEs" in result.stdout
+
+
+def test_findings_command_lists_and_filters(tmp_path):
+    db = tmp_path / "typos.db"
+    engine = init_db(db)
+    with engine.begin() as conn:
+        org_id = upsert_org(conn, "acme")
+        upsert_repos(conn, org_id, [RepoRecord("acme/widgets", "main", 0, False, False, None)])
+        repo_id = conn.execute(
+            select(repos_table.c.id).where(repos_table.c.full_name == "acme/widgets")
+        ).scalar_one()
+        save_readme_snapshot(
+            conn,
+            repo_id,
+            blob_sha="sha1",
+            raw_md="# Widgets\n\nYou will recieve the widget.\n",
+            extracted_text="x",
+        )
+    runner.invoke(app, ["check", "--db", str(db)])
+
+    listed = runner.invoke(app, ["findings", "--db", str(db)])
+    assert listed.exit_code == 0
+    assert "recieve -> receive" in listed.stdout
+    assert "acme/widgets" in listed.stdout
+
+    filtered = runner.invoke(app, ["findings", "--db", str(db), "--org", "google"])
+    assert "no findings match" in filtered.stdout
