@@ -9,9 +9,10 @@ from typer.testing import CliRunner
 
 from typocrawler import __version__
 from typocrawler.cli import app
-from typocrawler.db import init_db, make_engine, readme_snapshots
+from typocrawler.db import findings, init_db, make_engine, readme_snapshots
 from typocrawler.db import repos as repos_table
 from typocrawler.db.repo_store import upsert_org, upsert_repos
+from typocrawler.db.snapshot_store import save_readme_snapshot
 from typocrawler.github.discover import RepoRecord
 
 runner = CliRunner()
@@ -38,9 +39,9 @@ def test_orgs_lists_targets():
 
 
 def test_stubbed_command_exits_nonzero():
-    result = runner.invoke(app, ["check"])
+    result = runner.invoke(app, ["verify"])
     assert result.exit_code == 1
-    assert "stint 4" in result.stdout
+    assert "stint 6" in result.stdout
 
 
 def test_discover_requires_a_token(tmp_path, monkeypatch):
@@ -136,5 +137,42 @@ def test_fetch_reports_when_nothing_to_do(tmp_path, monkeypatch):
     db = tmp_path / "typos.db"
     init_db(db)
     result = runner.invoke(app, ["fetch", "--db", str(db)])
+    assert result.exit_code == 0
+    assert "all caught up" in result.stdout
+
+
+def test_check_records_findings_with_source_readme_line(tmp_path):
+    db = tmp_path / "typos.db"
+    engine = init_db(db)
+    with engine.begin() as conn:
+        org_id = upsert_org(conn, "acme")
+        upsert_repos(conn, org_id, [RepoRecord("acme/widgets", "main", 0, False, False, None)])
+        repo_id = conn.execute(
+            select(repos_table.c.id).where(repos_table.c.full_name == "acme/widgets")
+        ).scalar_one()
+        raw_md = "# Widgets\n\n```\nignored teh\n```\n\nYou will recieve the widget.\n"
+        save_readme_snapshot(
+            conn, repo_id, blob_sha="sha1", raw_md=raw_md, extracted_text="x"
+        )
+
+    result = runner.invoke(app, ["check", "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+
+    with make_engine(db).connect() as conn:
+        rows = conn.execute(
+            select(findings.c.token, findings.c.suggestion, findings.c.line_no, findings.c.source)
+        ).all()
+
+    tokens = {r.token: r for r in rows}
+    assert "recieve" in tokens
+    assert tokens["recieve"].suggestion == "receive"
+    assert tokens["recieve"].line_no == 7  # real README line, not the stripped-prose line
+    assert "teh" not in tokens  # inside a fenced code block, never checked
+
+
+def test_check_reports_when_nothing_to_do(tmp_path):
+    db = tmp_path / "typos.db"
+    init_db(db)
+    result = runner.invoke(app, ["check", "--db", str(db)])
     assert result.exit_code == 0
     assert "all caught up" in result.stdout

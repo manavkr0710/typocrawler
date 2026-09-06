@@ -6,9 +6,11 @@ are live now.
 
 from __future__ import annotations
 
+import tempfile
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import typer
@@ -16,14 +18,21 @@ from dotenv import load_dotenv
 from sqlalchemy import update
 
 from typocrawler import __version__
+from typocrawler.check.spell import crossref, run_codespell, run_typos
 from typocrawler.config import DEFAULT_CONFIG_PATH, load_config
 from typocrawler.db import DEFAULT_DB_PATH, init_db, repos
+from typocrawler.db.finding_store import (
+    FindingRow,
+    mark_checked,
+    snapshots_to_check,
+    upsert_findings,
+)
 from typocrawler.db.repo_store import record_crawl_run, upsert_org, upsert_repos
 from typocrawler.db.snapshot_store import repos_needing_readme, save_readme_snapshot
 from typocrawler.github.client import GitHubClient, GitHubError, GitHubRateLimitError
 from typocrawler.github.discover import iter_org_repos, should_keep
 from typocrawler.github.fetch import fetch_readme
-from typocrawler.text.extract import extract_prose
+from typocrawler.text.extract import extract_lines, extract_prose
 
 load_dotenv()  # pulls GITHUB_TOKEN (etc.) from a .env file in cwd/a parent dir, if present
 
@@ -237,9 +246,76 @@ def fetch(
 
 
 @app.command()
-def check(db: str = typer.Option(str(DEFAULT_DB_PATH))) -> None:
-    """Run the spell-checkers over extracted README text."""
-    _not_yet("check", 4)
+def check(
+    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read/write."),
+    limit: int = typer.Option(0, help="Max READMEs to check this run (0 = all remaining)."),
+) -> None:
+    """Run codespell + typos over fetched READMEs and record candidate typos.
+
+    Resumable: only snapshots not yet checked are processed. The checkers run on the stripped
+    prose, but each finding's line number points back to the original README.
+    """
+    engine = init_db(db)
+    with engine.begin() as conn:
+        snaps = list(snapshots_to_check(conn, limit=limit or None))
+    if not snaps:
+        typer.secho("no READMEs need checking — all caught up", fg=typer.colors.GREEN)
+        return
+
+    started_at = datetime.now(UTC)
+    # file_key -> (repo_id, blob_sha, [(source_line, prose), ...])
+    index: dict[str, tuple[int, str, list[tuple[int, str]]]] = {}
+
+    with tempfile.TemporaryDirectory(prefix="typocrawler-check-") as tmp:
+        tmp_dir = Path(tmp)
+        for snap in snaps:
+            lines = extract_lines(snap.raw_md)
+            key = f"{snap.id:08d}"
+            (tmp_dir / f"{key}.txt").write_text(
+                "\n".join(text for _, text in lines), encoding="utf-8"
+            )
+            index[key] = (snap.repo_id, snap.blob_sha, lines)
+
+        merged = crossref(run_codespell(tmp_dir) + run_typos(tmp_dir))
+
+    rows: list[FindingRow] = []
+    for hit in merged:
+        entry = index.get(hit.file_key)
+        if entry is None or not (1 <= hit.line <= len(entry[2])):
+            continue
+        repo_id, blob_sha, lines = entry
+        source_line, context = lines[hit.line - 1]
+        rows.append(
+            FindingRow(
+                repo_id=repo_id,
+                blob_sha=blob_sha,
+                line_no=source_line,
+                col=hit.col,
+                token=hit.word,
+                suggestion=hit.suggestion,
+                context_snippet=context[:300],
+                source=hit.source,
+                heuristic_score=hit.score,
+            )
+        )
+
+    with engine.begin() as conn:
+        written = upsert_findings(conn, rows)
+        mark_checked(conn, [s.id for s in snaps])
+        record_crawl_run(
+            conn,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+            repos_scanned=len(snaps),
+            api_points_used=0,
+            findings_new=written,
+        )
+
+    both = sum(1 for h in merged if h.source == "both")
+    typer.secho(
+        f"checked {len(snaps)} READMEs -> {written} findings ({both} flagged by both checkers)",
+        fg=typer.colors.GREEN,
+    )
 
 
 @app.command()
