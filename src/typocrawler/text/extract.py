@@ -32,12 +32,24 @@ def _inline_prose(children: list) -> str:
     return _WS.sub(" ", "".join(parts)).strip()
 
 
-def extract_prose(markdown: str) -> str:
-    """Return the checkable prose of a README as newline-separated lines."""
-    lines: list[str] = []
+def extract_lines(markdown: str) -> list[tuple[int, str]]:
+    """``(source_line, prose)`` for each non-empty block, source line 1-based.
+
+    The source line lets a finding point back to a real line in the original README even
+    though the checkers run on the stripped-down prose.
+    """
+    out: list[tuple[int, str]] = []
+    source_line = 1
     for token in _md.parse(markdown):
+        if token.map:
+            source_line = token.map[0] + 1
         if token.type == "inline" and token.children:
             text = _inline_prose(token.children)
             if text:
-                lines.append(text)
-    return "\n".join(lines)
+                out.append((source_line, text))
+    return out
+
+
+def extract_prose(markdown: str) -> str:
+    """Return the checkable prose of a README as newline-separated lines."""
+    return "\n".join(text for _, text in extract_lines(markdown))
