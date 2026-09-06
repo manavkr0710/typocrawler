@@ -31,10 +31,11 @@ typocrawler init-db              # create the SQLite schema (typos.db)
 typocrawler orgs                 # show the resolved target org list
 typocrawler discover             # enumerate org repos (needs GITHUB_TOKEN)
 typocrawler fetch                # pull READMEs + extract prose (resumable, --limit N)
+typocrawler check                # run codespell + typos, record candidate typos (resumable)
 ```
 
-If you have an existing `typos.db` from before Stint 3, run `alembic upgrade head` once to add
-the new column.
+If you have an existing `typos.db` from an earlier stint, run `alembic upgrade head` once to
+pick up new columns.
 
 `GITHUB_TOKEN` is read from `.env` automatically (gitignored, never commit it), or from a real
 environment variable, or via `--token`. A fine-grained PAT with "Public Repositories (read-only)"
@@ -48,14 +49,13 @@ Configure targets in [`config/orgs.yml`](config/orgs.yml).
 |---|---|
 | `config/orgs.yml` | Target orgs + per-org overrides |
 | `src/typocrawler/config.py` | Config schema and loader |
-| `src/typocrawler/db/` | SQLAlchemy Core schema + engine + upsert layer |
-| `src/typocrawler/github/` | GitHub GraphQL client + repo discovery |
+| `src/typocrawler/db/` | SQLAlchemy Core schema + engine + upsert/query layers |
+| `src/typocrawler/github/` | GitHub client + repo discovery + README fetch |
+| `src/typocrawler/text/` | Markdown → prose extraction |
+| `src/typocrawler/check/` | codespell + typos runners and cross-referencing |
 | `src/typocrawler/cli.py` | `typocrawler` CLI (Typer) |
 | `migrations/` | Alembic migrations |
 | `tests/` | pytest suite |
-
-Discovery needs a GitHub token: `export GITHUB_TOKEN=ghp_...` (public-repo read scope is enough),
-then `typocrawler discover`.
 
 ## Build status
 
@@ -64,7 +64,7 @@ Built in sequential "stints", one branch/PR each:
 - [x] **Stint 1 — skeleton:** tooling, config, DB schema, CLI stubs
 - [x] **Stint 2 — repo discovery:** GitHub GraphQL client, pagination, filtering, DB upserts
 - [x] **Stint 3 — README fetch + extraction:** ETag-cached REST fetch, resumable, markdown → prose
-- [ ] Stint 4 — spell-checkers
+- [x] **Stint 4 — spell-checkers:** codespell + typos over the prose, cross-referenced into findings
 - [ ] Stint 5 — heuristic filter
 - [ ] Stint 6 — LLM verification
 - [ ] Stint 7 — static dashboard
