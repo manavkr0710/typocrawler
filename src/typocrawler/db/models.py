@@ -85,6 +85,7 @@ findings = Table(
     Column("context_snippet", Text, nullable=False, server_default=""),
     Column("source", String, nullable=False),
     Column("heuristic_score", Integer, nullable=False, server_default="0"),
+    Column("filter_reason", String),
     Column("llm_verdict", String),
     Column("llm_correction", String),
     Column("status", String, nullable=False, server_default="new"),
