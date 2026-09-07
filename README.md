@@ -31,7 +31,9 @@ typocrawler init-db              # create the SQLite schema (typos.db)
 typocrawler orgs                 # show the resolved target org list
 typocrawler discover             # enumerate org repos (needs GITHUB_TOKEN)
 typocrawler fetch                # pull READMEs + extract prose (resumable, --limit N)
-typocrawler check                # run codespell + typos, record candidate typos (resumable)
+typocrawler check                # run codespell + typos + heuristic filter (resumable)
+typocrawler findings --source both   # view what survived; --rejected shows what was filtered
+typocrawler filter               # re-run heuristics after editing config/allowlist.txt
 ```
 
 If you have an existing `typos.db` from an earlier stint, run `alembic upgrade head` once to
@@ -65,7 +67,7 @@ Built in sequential "stints", one branch/PR each:
 - [x] **Stint 2 — repo discovery:** GitHub GraphQL client, pagination, filtering, DB upserts
 - [x] **Stint 3 — README fetch + extraction:** ETag-cached REST fetch, resumable, markdown → prose
 - [x] **Stint 4 — spell-checkers:** codespell + typos over the prose, cross-referenced into findings
-- [ ] Stint 5 — heuristic filter
+- [x] **Stint 5 — heuristic filter:** drop acronyms, identifiers, table fragments, allowlisted words
 - [ ] Stint 6 — LLM verification
 - [ ] Stint 7 — static dashboard
 - [ ] Stint 8 — GitHub Actions automation
