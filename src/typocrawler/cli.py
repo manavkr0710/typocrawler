@@ -18,12 +18,14 @@ from dotenv import load_dotenv
 from sqlalchemy import select, update
 
 from typocrawler import __version__
+from typocrawler.check.heuristics import classify, load_allowlist
 from typocrawler.check.spell import crossref, run_codespell, run_typos
 from typocrawler.config import DEFAULT_CONFIG_PATH, load_config
 from typocrawler.db import DEFAULT_DB_PATH, findings, init_db, repos
 from typocrawler.db.finding_store import (
     FindingRow,
     mark_checked,
+    reclassify,
     snapshots_to_check,
     upsert_findings,
 )
@@ -245,8 +247,8 @@ def fetch(
     typer.secho(f"fetch done: {dict(counts)}", fg=colour)
 
 
-def _check_batch(snaps) -> tuple[list[FindingRow], int]:
-    """Run both checkers over one batch of snapshots and build finding rows."""
+def _check_batch(snaps, allowlist: set[str]) -> tuple[list[FindingRow], int]:
+    """Run both checkers over one batch of snapshots and build (already classified) rows."""
     # file_key -> (repo_id, blob_sha, [(source_line, prose), ...])
     index: dict[str, tuple[int, str, list[tuple[int, str]]]] = {}
 
@@ -269,6 +271,7 @@ def _check_batch(snaps) -> tuple[list[FindingRow], int]:
             continue
         repo_id, blob_sha, lines = entry
         source_line, context = lines[hit.line - 1]
+        verdict = classify(hit.word, hit.suggestion, context, allowlist)
         rows.append(
             FindingRow(
                 repo_id=repo_id,
@@ -280,6 +283,8 @@ def _check_batch(snaps) -> tuple[list[FindingRow], int]:
                 context_snippet=context[:300],
                 source=hit.source,
                 heuristic_score=hit.score,
+                status="new" if verdict.keep else "false_positive",
+                filter_reason=verdict.reason,
             )
         )
     return rows, sum(1 for h in merged if h.source == "both")
@@ -291,13 +296,15 @@ def check(
     limit: int = typer.Option(0, help="Max READMEs to check this run (0 = all remaining)."),
     batch: int = typer.Option(250, min=1, help="READMEs per batch; each batch is committed."),
 ) -> None:
-    """Run codespell + typos over fetched READMEs and record candidate typos.
+    """Run codespell + typos over fetched READMEs, then heuristically filter the hits.
 
     Resumable: only snapshots not yet checked are processed, and each batch is committed as it
-    finishes — an interrupted run keeps its completed batches. The checkers run on the stripped
-    prose, but each finding's line number points back to the original README.
+    finishes. The checkers run on the stripped prose, but each finding's line number points back
+    to the original README. Findings that fail the heuristics land as ``false_positive`` — see
+    ``typocrawler findings --rejected``.
     """
     engine = init_db(db)
+    allowlist = load_allowlist()
     with engine.begin() as conn:
         snaps = list(snapshots_to_check(conn, limit=limit or None))
     if not snaps:
@@ -305,18 +312,21 @@ def check(
         return
 
     started_at = datetime.now(UTC)
-    total_findings = total_both = 0
+    total_findings = total_kept = total_both = 0
 
     for start in range(0, len(snaps), batch):
         chunk = snaps[start : start + batch]
-        rows, both = _check_batch(chunk)
+        rows, both = _check_batch(chunk, allowlist)
         with engine.begin() as conn:
             written = upsert_findings(conn, rows)
             mark_checked(conn, [s.id for s in chunk])
+        kept = sum(1 for r in rows if r.status == "new")
         total_findings += written
+        total_kept += kept
         total_both += both
         typer.echo(
-            f"  {min(start + batch, len(snaps))}/{len(snaps)} READMEs  (+{written} findings)"
+            f"  {min(start + batch, len(snaps))}/{len(snaps)} READMEs  "
+            f"(+{written} findings, {kept} kept)"
         )
 
     with engine.begin() as conn:
@@ -330,10 +340,27 @@ def check(
         )
 
     typer.secho(
-        f"checked {len(snaps)} READMEs -> {total_findings} findings "
-        f"({total_both} flagged by both checkers)",
+        f"checked {len(snaps)} READMEs -> {total_findings} findings, "
+        f"{total_kept} kept after heuristics ({total_both} flagged by both checkers)",
         fg=typer.colors.GREEN,
     )
+
+
+@app.command("filter")
+def filter_cmd(
+    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read/write."),
+) -> None:
+    """Re-run the heuristic filters over all findings (e.g. after editing the allowlist)."""
+    engine = init_db(db)
+    allowlist = load_allowlist()
+    with engine.begin() as conn:
+        outcomes = reclassify(conn, allowlist)
+
+    kept = outcomes.pop("kept", 0)
+    total = kept + sum(outcomes.values())
+    typer.secho(f"re-filtered {total} findings -> {kept} kept", fg=typer.colors.GREEN)
+    for reason, n in outcomes.most_common():
+        typer.echo(f"  rejected {n:>5}  {reason}")
 
 
 @app.command("findings")
@@ -342,8 +369,10 @@ def findings_cmd(
     limit: int = typer.Option(50, help="Max rows to show."),
     source: str = typer.Option("", help="Filter by source: codespell, typos, both."),
     org: str = typer.Option("", help="Filter by org login, e.g. google."),
+    rejected: bool = typer.Option(False, "--rejected", help="Show heuristically-filtered ones."),
+    all_: bool = typer.Option(False, "--all", help="Show findings of every status."),
 ) -> None:
-    """Print recorded typo findings, highest-confidence first."""
+    """Print typo findings — by default the ones that survived the heuristics."""
     engine = init_db(db)
     stmt = (
         select(
@@ -353,11 +382,16 @@ def findings_cmd(
             findings.c.suggestion,
             findings.c.source,
             findings.c.context_snippet,
+            findings.c.filter_reason,
         )
         .select_from(findings.join(repos, findings.c.repo_id == repos.c.id))
         .order_by(findings.c.heuristic_score.desc(), repos.c.full_name)
         .limit(limit)
     )
+    if rejected:
+        stmt = stmt.where(findings.c.status == "false_positive")
+    elif not all_:
+        stmt = stmt.where(findings.c.status == "new")
     if source:
         stmt = stmt.where(findings.c.source == source)
     if org:
@@ -370,7 +404,8 @@ def findings_cmd(
         typer.secho("no findings match", fg=typer.colors.YELLOW)
         return
     for r in rows:
-        typer.secho(f"{r.source:9} ", fg=typer.colors.CYAN, nl=False)
+        tag = f"{r.source}/{r.filter_reason}" if r.filter_reason else r.source
+        typer.secho(f"{tag:16} ", fg=typer.colors.CYAN, nl=False)
         typer.echo(f"{r.full_name}:{r.line_no}  {r.token} -> {r.suggestion}")
         typer.secho(f"    {r.context_snippet[:100]}", fg=typer.colors.BRIGHT_BLACK)
     typer.echo(f"\n{len(rows)} shown")

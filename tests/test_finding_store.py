@@ -6,6 +6,7 @@ from typocrawler.db import findings, readme_snapshots, repos
 from typocrawler.db.finding_store import (
     FindingRow,
     mark_checked,
+    reclassify,
     snapshots_to_check,
     upsert_findings,
 )
@@ -68,6 +69,50 @@ def test_upsert_findings_is_idempotent_on_the_unique_key(engine):
         source = conn.execute(select(findings.c.source)).scalar_one()
     assert count == 1
     assert source == "codespell"  # refreshed on conflict
+
+
+def test_reclassify_rejects_and_is_idempotent(engine):
+    repo_id, _ = _seed_snapshot(engine)
+    with engine.begin() as conn:
+        upsert_findings(
+            conn,
+            [
+                _row(repo_id, "sha1", token="recieve", line_no=1),  # real -> kept
+                _row(repo_id, "sha1", token="AKS", suggestion="ASK", line_no=2),  # acronym
+                _row(repo_id, "sha1", token="widget", line_no=3),  # allowlisted below
+            ],
+        )
+
+    with engine.begin() as conn:
+        outcomes = reclassify(conn, allowlist={"widget"})
+
+    assert outcomes["kept"] == 1
+    assert outcomes["acronym"] == 1
+    assert outcomes["allowlist"] == 1
+
+    with engine.connect() as conn:
+        cols = select(findings.c.token, findings.c.status, findings.c.filter_reason)
+        by_token = {r.token: (r.status, r.filter_reason) for r in conn.execute(cols)}
+    assert by_token["recieve"] == ("new", None)
+    assert by_token["AKS"][0] == "false_positive"
+    assert by_token["widget"] == ("false_positive", "allowlist")
+
+    # running again changes nothing
+    with engine.begin() as conn:
+        again = reclassify(conn, allowlist={"widget"})
+    assert again == outcomes
+
+
+def test_reclassify_leaves_confirmed_findings_alone(engine):
+    repo_id, _ = _seed_snapshot(engine)
+    confirmed = _row(repo_id, "sha1", token="AKS", suggestion="ASK", status="confirmed")
+    with engine.begin() as conn:
+        upsert_findings(conn, [confirmed])
+    with engine.begin() as conn:
+        reclassify(conn, allowlist=set())
+    with engine.connect() as conn:
+        status = conn.execute(select(findings.c.status)).scalar_one()
+    assert status == "confirmed"
 
 
 def test_mark_checked_sets_timestamp(engine):

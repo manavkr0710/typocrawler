@@ -1,0 +1,8 @@
+# Words the spell-checkers misread as typos. One per line, case-insensitive, # for comments.
+# Grow this as you spot false positives with `typocrawler findings --rejected`.
+
+aks          # Azure Kubernetes Service
+aci          # Azure Container Instances
+synopsys     # EDA tooling company
+nats         # messaging system
+substr       # common function name in prose

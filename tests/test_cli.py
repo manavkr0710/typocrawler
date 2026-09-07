@@ -230,3 +230,60 @@ def test_findings_command_lists_and_filters(tmp_path):
 
     filtered = runner.invoke(app, ["findings", "--db", str(db), "--org", "google"])
     assert "no findings match" in filtered.stdout
+
+
+def test_check_filters_acronyms_but_keeps_real_typos(tmp_path):
+    db = tmp_path / "typos.db"
+    engine = init_db(db)
+    with engine.begin() as conn:
+        org_id = upsert_org(conn, "acme")
+        upsert_repos(conn, org_id, [RepoRecord("acme/widgets", "main", 0, False, False, None)])
+        repo_id = conn.execute(
+            select(repos_table.c.id).where(repos_table.c.full_name == "acme/widgets")
+        ).scalar_one()
+        save_readme_snapshot(
+            conn,
+            repo_id,
+            blob_sha="sha1",
+            raw_md="# Widgets\n\nDeploy to AKS then recieve the callback in your enviroment.\n",
+            extracted_text="x",
+        )
+
+    runner.invoke(app, ["check", "--db", str(db)])
+
+    kept = runner.invoke(app, ["findings", "--db", str(db)]).stdout
+    assert "recieve -> receive" in kept
+    assert "enviroment -> environment" in kept
+    assert "AKS -> ASK" not in kept  # filtered by the heuristics
+
+    rejected = runner.invoke(app, ["findings", "--db", str(db), "--rejected"]).stdout
+    assert "AKS -> ASK" in rejected
+
+
+def test_filter_command_reclassifies_after_allowlist_edit(tmp_path, monkeypatch):
+    db = tmp_path / "typos.db"
+    engine = init_db(db)
+    with engine.begin() as conn:
+        org_id = upsert_org(conn, "acme")
+        upsert_repos(conn, org_id, [RepoRecord("acme/widgets", "main", 0, False, False, None)])
+        repo_id = conn.execute(
+            select(repos_table.c.id).where(repos_table.c.full_name == "acme/widgets")
+        ).scalar_one()
+        save_readme_snapshot(
+            conn,
+            repo_id,
+            blob_sha="sha1",
+            raw_md="# Widgets\n\nKeep the runtime config seperate from the app code.\n",
+            extracted_text="x",
+        )
+    runner.invoke(app, ["check", "--db", str(db)])
+    assert "seperate" in runner.invoke(app, ["findings", "--db", str(db)]).stdout
+
+    allow = tmp_path / "allowlist.txt"
+    allow.write_text("seperate\n", encoding="utf-8")
+    monkeypatch.setattr("typocrawler.check.heuristics.DEFAULT_ALLOWLIST_PATH", allow)
+
+    result = runner.invoke(app, ["filter", "--db", str(db)])
+    assert result.exit_code == 0
+    assert "allowlist" in result.stdout
+    assert "seperate" not in runner.invoke(app, ["findings", "--db", str(db)]).stdout

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from sqlalchemy import Connection, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from typocrawler.check.heuristics import classify
 from typocrawler.db.models import findings, readme_snapshots
+
+_LOCKED = ("confirmed", "fixed")  # human/LLM verdicts the heuristic pass must not overwrite
 
 
 def snapshots_to_check(conn: Connection, *, limit: int | None = None):
@@ -50,6 +54,8 @@ class FindingRow:
     context_snippet: str
     source: str
     heuristic_score: int
+    status: str = "new"
+    filter_reason: str = field(default="")
 
 
 def upsert_findings(conn: Connection, rows: Sequence[FindingRow]) -> int:
@@ -66,6 +72,8 @@ def upsert_findings(conn: Connection, rows: Sequence[FindingRow]) -> int:
             context_snippet=r.context_snippet,
             source=r.source,
             heuristic_score=r.heuristic_score,
+            filter_reason=r.filter_reason or None,
+            status=r.status,
             first_seen_at=now,
             last_seen_at=now,
         )
@@ -77,8 +85,40 @@ def upsert_findings(conn: Connection, rows: Sequence[FindingRow]) -> int:
                 "col": stmt.excluded.col,
                 "source": stmt.excluded.source,
                 "heuristic_score": stmt.excluded.heuristic_score,
+                "filter_reason": stmt.excluded.filter_reason,
+                "status": stmt.excluded.status,
                 "last_seen_at": stmt.excluded.last_seen_at,
             },
         )
         conn.execute(stmt)
     return len(rows)
+
+
+def reclassify(conn: Connection, allowlist: set[str]) -> Counter[str]:
+    """Re-run the heuristic rules over every finding not already confirmed/fixed.
+
+    Idempotent — safe to re-run after editing ``config/allowlist.txt`` or the rules.
+    Returns a count per outcome (``kept``, ``acronym``, ``allowlist``, ...).
+    """
+    rows = conn.execute(
+        select(
+            findings.c.id,
+            findings.c.token,
+            findings.c.suggestion,
+            findings.c.context_snippet,
+        ).where(findings.c.status.not_in(_LOCKED))
+    ).all()
+
+    outcomes: Counter[str] = Counter()
+    for row in rows:
+        verdict = classify(row.token, row.suggestion, row.context_snippet, allowlist)
+        outcomes["kept" if verdict.keep else verdict.reason] += 1
+        conn.execute(
+            update(findings)
+            .where(findings.c.id == row.id)
+            .values(
+                status="new" if verdict.keep else "false_positive",
+                filter_reason=verdict.reason or None,
+            )
+        )
+    return outcomes
