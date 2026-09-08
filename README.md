@@ -32,8 +32,9 @@ typocrawler orgs                 # show the resolved target org list
 typocrawler discover             # enumerate org repos (needs GITHUB_TOKEN)
 typocrawler fetch                # pull READMEs + extract prose (resumable, --limit N)
 typocrawler check                # run codespell + typos + heuristic filter (resumable)
-typocrawler findings --source both   # view what survived; --rejected shows what was filtered
 typocrawler filter               # re-run heuristics after editing config/allowlist.txt
+typocrawler verify               # LLM confirms each survivor (needs GROQ_API_KEY / GEMINI_API_KEY / Ollama)
+typocrawler findings --confirmed # the final list of genuine typos
 ```
 
 If you have an existing `typos.db` from an earlier stint, run `alembic upgrade head` once to
@@ -42,6 +43,18 @@ pick up new columns.
 `GITHUB_TOKEN` is read from `.env` automatically (gitignored, never commit it), or from a real
 environment variable, or via `--token`. A fine-grained PAT with "Public Repositories (read-only)"
 access is enough — see [`.env.example`](.env.example).
+
+### Verification provider
+
+`verify` needs an LLM. In order of preference:
+
+| Provider | Setup | Notes |
+|---|---|---|
+| Groq | `GROQ_API_KEY` in `.env` | Fast; needs a small credit purchase as of 2025 |
+| Gemini | `GEMINI_API_KEY` in `.env` | Free but ~20 requests/day on current models |
+| Ollama | install [ollama](https://ollama.com), `ollama pull qwen2.5:7b` | Local, unlimited, $0. Use a 7B+ model — smaller ones misalign batched answers, so pass `--batch 1` with a 3B model |
+
+`typocrawler verify` auto-picks whichever is configured. `--reset` clears all verdicts and starts over.
 
 Configure targets in [`config/orgs.yml`](config/orgs.yml).
 
@@ -54,7 +67,8 @@ Configure targets in [`config/orgs.yml`](config/orgs.yml).
 | `src/typocrawler/db/` | SQLAlchemy Core schema + engine + upsert/query layers |
 | `src/typocrawler/github/` | GitHub client + repo discovery + README fetch |
 | `src/typocrawler/text/` | Markdown → prose extraction |
-| `src/typocrawler/check/` | codespell + typos runners and cross-referencing |
+| `src/typocrawler/check/` | codespell + typos runners, cross-referencing, heuristic filters |
+| `src/typocrawler/verify/` | pluggable LLM back-ends + prompt/parse for verification |
 | `src/typocrawler/cli.py` | `typocrawler` CLI (Typer) |
 | `migrations/` | Alembic migrations |
 | `tests/` | pytest suite |
@@ -68,7 +82,7 @@ Built in sequential "stints", one branch/PR each:
 - [x] **Stint 3 — README fetch + extraction:** ETag-cached REST fetch, resumable, markdown → prose
 - [x] **Stint 4 — spell-checkers:** codespell + typos over the prose, cross-referenced into findings
 - [x] **Stint 5 — heuristic filter:** drop acronyms, identifiers, table fragments, allowlisted words
-- [ ] Stint 6 — LLM verification
+- [x] **Stint 6 — LLM verification:** pluggable Groq/Gemini/Ollama pass confirms real typos in context
 - [ ] Stint 7 — static dashboard
 - [ ] Stint 8 — GitHub Actions automation
 - [ ] Stint 9 — polish
