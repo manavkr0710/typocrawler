@@ -20,7 +20,9 @@ _TRANSIENT_NAMES = {"ServerError", "InternalServerError", "RateLimitError", "API
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """Retry rate-limit / 5xx errors from any provider; fail fast on everything else."""
+    """Retry rate-limit / 5xx / timeout errors from any provider; fail fast on everything else."""
+    if isinstance(exc, httpx.TransportError):  # timeouts, connection resets
+        return True
     code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
     if code in _TRANSIENT_CODES:
         return True
@@ -172,20 +174,25 @@ class OllamaVerifier:
                 f"Ollama not reachable at {self._host} — is `ollama serve` running?"
             ) from exc
 
-    def verify(self, items: list[VerifyItem]) -> list[VerifyResult]:
+    @_retry_transient
+    def _generate(self, prompt: str) -> str:
         resp = httpx.post(
             f"{self._host}/api/generate",
             json={
                 "model": self._model,
-                "prompt": build_prompt(items),
+                "prompt": prompt,
                 "stream": False,
                 "format": _OLLAMA_SCHEMA,
                 "options": {"temperature": 0},
+                "keep_alive": "30m",
             },
-            timeout=300.0,
+            timeout=httpx.Timeout(600.0, connect=10.0),
         )
         resp.raise_for_status()
-        return parse_response(resp.json()["response"], len(items))
+        return str(resp.json()["response"])
+
+    def verify(self, items: list[VerifyItem]) -> list[VerifyResult]:
+        return parse_response(self._generate(build_prompt(items)), len(items))
 
 
 def get_verifier(provider: str = "", *, model: str | None = None, rpm: float = 0) -> Verifier:
