@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from typocrawler.db import findings, readme_snapshots, repos
 from typocrawler.db.finding_store import (
     FindingRow,
+    apply_verdicts,
+    findings_to_verify,
     mark_checked,
     reclassify,
+    reset_verdicts,
     snapshots_to_check,
     upsert_findings,
 )
@@ -113,6 +116,105 @@ def test_reclassify_leaves_confirmed_findings_alone(engine):
     with engine.connect() as conn:
         status = conn.execute(select(findings.c.status)).scalar_one()
     assert status == "confirmed"
+
+
+def test_findings_to_verify_skips_rejected_and_already_verified(engine):
+    repo_id, _ = _seed_snapshot(engine)
+    with engine.begin() as conn:
+        upsert_findings(
+            conn,
+            [
+                _row(repo_id, "sha1", token="recieve", line_no=1),  # new, unverified -> included
+                _row(repo_id, "sha1", token="teh", line_no=2, status="false_positive"),  # skip
+                _row(repo_id, "sha1", token="hepls", line_no=3),
+            ],
+        )
+        # mark one as already verified
+        conn.execute(
+            update(findings)
+            .where(findings.c.token == "hepls")
+            .values(llm_verdict="unsure")
+        )
+
+    with engine.connect() as conn:
+        pending = findings_to_verify(conn)
+    assert [p.token for p in pending] == ["recieve"]
+
+
+def test_apply_verdicts_sets_status_by_verdict(engine):
+    repo_id, _ = _seed_snapshot(engine)
+    with engine.begin() as conn:
+        upsert_findings(
+            conn,
+            [
+                _row(repo_id, "sha1", token="recieve", line_no=1),
+                _row(repo_id, "sha1", token="Kubernetes", suggestion="kubernetes", line_no=2),
+                _row(repo_id, "sha1", token="als", suggestion="also", line_no=3),
+            ],
+        )
+        ids = {
+            r.token: r.id
+            for r in conn.execute(select(findings.c.token, findings.c.id))
+        }
+
+    with engine.begin() as conn:
+        counts = apply_verdicts(
+            conn,
+            [
+                (ids["recieve"], "typo", "receive"),
+                (ids["Kubernetes"], "not_typo", ""),
+                (ids["als"], "unsure", ""),
+            ],
+        )
+
+    assert counts == {"typo": 1, "not_typo": 1, "unsure": 1}
+    with engine.connect() as conn:
+        by_token = {
+            r.token: (r.status, r.llm_verdict, r.llm_correction)
+            for r in conn.execute(
+                select(
+                    findings.c.token,
+                    findings.c.status,
+                    findings.c.llm_verdict,
+                    findings.c.llm_correction,
+                )
+            )
+        }
+    assert by_token["recieve"] == ("confirmed", "typo", "receive")
+    assert by_token["Kubernetes"] == ("false_positive", "not_typo", None)
+    assert by_token["als"] == ("new", "unsure", None)  # unsure stays 'new'
+
+
+def test_reset_verdicts_clears_llm_rows_only(engine):
+    repo_id, _ = _seed_snapshot(engine)
+    with engine.begin() as conn:
+        upsert_findings(
+            conn,
+            [
+                _row(repo_id, "sha1", token="recieve", line_no=1),
+                _row(repo_id, "sha1", token="AKS", line_no=2, status="false_positive",
+                     filter_reason="acronym"),
+            ],
+        )
+        ids = {r.token: r.id for r in conn.execute(select(findings.c.token, findings.c.id))}
+        apply_verdicts(conn, [(ids["recieve"], "not_typo", "")])
+
+    with engine.begin() as conn:
+        cleared = reset_verdicts(conn)
+    assert cleared == 1
+
+    with engine.connect() as conn:
+        cols = select(
+            findings.c.token,
+            findings.c.status,
+            findings.c.llm_verdict,
+            findings.c.filter_reason,
+        )
+        rows = {
+            r.token: (r.status, r.llm_verdict, r.filter_reason) for r in conn.execute(cols)
+        }
+    assert rows["recieve"] == ("new", None, None)  # LLM verdict undone
+    assert rows["AKS"] == ("false_positive", None, "acronym")  # heuristic rejection untouched
 
 
 def test_mark_checked_sets_timestamp(engine):

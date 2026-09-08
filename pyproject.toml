@@ -22,6 +22,8 @@ dependencies = [
     "markdown-it-py>=3.0",
     "codespell>=2.3",
     "typos>=1.29",
+    "groq>=0.11",
+    "google-genai>=1.0",
 ]
 
 [project.optional-dependencies]

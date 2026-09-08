@@ -24,8 +24,11 @@ from typocrawler.config import DEFAULT_CONFIG_PATH, load_config
 from typocrawler.db import DEFAULT_DB_PATH, findings, init_db, repos
 from typocrawler.db.finding_store import (
     FindingRow,
+    apply_verdicts,
+    findings_to_verify,
     mark_checked,
     reclassify,
+    reset_verdicts,
     snapshots_to_check,
     upsert_findings,
 )
@@ -35,6 +38,8 @@ from typocrawler.github.client import GitHubClient, GitHubError, GitHubRateLimit
 from typocrawler.github.discover import iter_org_repos, should_keep
 from typocrawler.github.fetch import fetch_readme
 from typocrawler.text.extract import extract_lines, extract_prose
+from typocrawler.verify.llm import get_verifier
+from typocrawler.verify.prompt import VerifyItem
 
 load_dotenv()  # pulls GITHUB_TOKEN (etc.) from a .env file in cwd/a parent dir, if present
 
@@ -366,13 +371,18 @@ def filter_cmd(
 @app.command("findings")
 def findings_cmd(
     db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read."),
-    limit: int = typer.Option(50, help="Max rows to show."),
+    limit: int = typer.Option(50, help="Max rows to show (0 = all)."),
     source: str = typer.Option("", help="Filter by source: codespell, typos, both."),
     org: str = typer.Option("", help="Filter by org login, e.g. google."),
-    rejected: bool = typer.Option(False, "--rejected", help="Show heuristically-filtered ones."),
+    confirmed: bool = typer.Option(False, "--confirmed", help="Only LLM-confirmed typos."),
+    rejected: bool = typer.Option(False, "--rejected", help="Only ones that were filtered out."),
     all_: bool = typer.Option(False, "--all", help="Show findings of every status."),
 ) -> None:
-    """Print typo findings — by default the ones that survived the heuristics."""
+    """Print typo findings.
+
+    Default: the current best list — LLM-confirmed first, then unverified survivors — skipping
+    everything ruled out by the heuristics or the LLM.
+    """
     engine = init_db(db)
     stmt = (
         select(
@@ -380,18 +390,28 @@ def findings_cmd(
             findings.c.line_no,
             findings.c.token,
             findings.c.suggestion,
+            findings.c.llm_correction,
             findings.c.source,
-            findings.c.context_snippet,
+            findings.c.status,
+            findings.c.llm_verdict,
             findings.c.filter_reason,
+            findings.c.context_snippet,
         )
         .select_from(findings.join(repos, findings.c.repo_id == repos.c.id))
-        .order_by(findings.c.heuristic_score.desc(), repos.c.full_name)
-        .limit(limit)
+        .order_by(
+            (findings.c.status == "confirmed").desc(),
+            findings.c.heuristic_score.desc(),
+            repos.c.full_name,
+        )
     )
-    if rejected:
+    if limit:
+        stmt = stmt.limit(limit)
+    if confirmed:
+        stmt = stmt.where(findings.c.status == "confirmed")
+    elif rejected:
         stmt = stmt.where(findings.c.status == "false_positive")
     elif not all_:
-        stmt = stmt.where(findings.c.status == "new")
+        stmt = stmt.where(findings.c.status.in_(["new", "confirmed"]))
     if source:
         stmt = stmt.where(findings.c.source == source)
     if org:
@@ -404,17 +424,97 @@ def findings_cmd(
         typer.secho("no findings match", fg=typer.colors.YELLOW)
         return
     for r in rows:
-        tag = f"{r.source}/{r.filter_reason}" if r.filter_reason else r.source
-        typer.secho(f"{tag:16} ", fg=typer.colors.CYAN, nl=False)
+        tag = r.filter_reason or r.llm_verdict or r.status
+        colour = typer.colors.GREEN if r.status == "confirmed" else typer.colors.CYAN
+        typer.secho(f"{tag:13} ", fg=colour, nl=False)
         typer.echo(f"{r.full_name}:{r.line_no}  {r.token} -> {r.suggestion}")
         typer.secho(f"    {r.context_snippet[:100]}", fg=typer.colors.BRIGHT_BLACK)
     typer.echo(f"\n{len(rows)} shown")
 
 
 @app.command()
-def verify(db: str = typer.Option(str(DEFAULT_DB_PATH))) -> None:
-    """LLM verification pass over candidate findings."""
-    _not_yet("verify", 6)
+def verify(
+    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read/write."),
+    provider: str = typer.Option(
+        "", help="groq | gemini | ollama | stub. Default: whichever API key is set, else ollama."
+    ),
+    model: str = typer.Option("", help="Override the model name for the provider."),
+    limit: int = typer.Option(0, help="Max findings to verify this run (0 = all remaining)."),
+    batch: int = typer.Option(
+        40, min=1, max=100, help="Findings per LLM call. Use 1 with small local models."
+    ),
+    rpm: int = typer.Option(
+        0, min=0, help="Requests/minute throttle (0 = provider default). Raise if quota allows."
+    ),
+    reset: bool = typer.Option(
+        False, "--reset", help="Clear all existing LLM verdicts first, then re-verify from scratch."
+    ),
+) -> None:
+    """Ask an LLM whether each finding that survived the heuristics is a real typo in context.
+
+    Resumable: only findings without an LLM verdict are sent, and each batch is committed.
+    ``typo`` -> ``confirmed``, ``not_typo`` -> ``false_positive``, ``unsure`` -> left for review.
+    """
+    engine = init_db(db)
+    if reset:
+        with engine.begin() as conn:
+            cleared = reset_verdicts(conn)
+        typer.secho(f"cleared {cleared} LLM verdicts", fg=typer.colors.YELLOW)
+    with engine.begin() as conn:
+        pending = list(findings_to_verify(conn, limit=limit or None))
+    if not pending:
+        typer.secho("no findings need verification — all caught up", fg=typer.colors.GREEN)
+        return
+
+    try:
+        verifier = get_verifier(provider, model=model or None, rpm=rpm)
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"verifying {len(pending)} findings with '{verifier.name}'")
+    started_at = datetime.now(UTC)
+    totals: Counter[str] = Counter()
+    stopped = False
+
+    for start in range(0, len(pending), batch):
+        chunk = pending[start : start + batch]
+        items = [
+            VerifyItem(r.token, r.suggestion, r.context_snippet, r.full_name) for r in chunk
+        ]
+        try:
+            results = verifier.verify(items)
+        except Exception as exc:  # noqa: BLE001 - any backend failure should stop cleanly
+            typer.secho(
+                f"\nLLM call failed: {exc}\nre-run `typocrawler verify` to continue.",
+                fg=typer.colors.YELLOW,
+            )
+            stopped = True
+            break
+        updates = [
+            (row.id, res.verdict, res.correction)
+            for row, res in zip(chunk, results, strict=True)
+        ]
+        with engine.begin() as conn:
+            totals.update(apply_verdicts(conn, updates))
+        typer.echo(f"  {min(start + batch, len(pending))}/{len(pending)}  {dict(totals)}")
+
+    with engine.begin() as conn:
+        record_crawl_run(
+            conn,
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+            repos_scanned=0,
+            api_points_used=sum(totals.values()),
+            findings_confirmed=totals.get("typo", 0),
+        )
+
+    colour = typer.colors.YELLOW if stopped else typer.colors.GREEN
+    typer.secho(
+        f"verified: {totals.get('typo', 0)} confirmed, {totals.get('not_typo', 0)} rejected, "
+        f"{totals.get('unsure', 0)} unsure",
+        fg=colour,
+    )
 
 
 @app.command()
