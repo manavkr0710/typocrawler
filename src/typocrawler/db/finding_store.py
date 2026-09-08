@@ -11,9 +11,10 @@ from sqlalchemy import Connection, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from typocrawler.check.heuristics import classify
-from typocrawler.db.models import findings, readme_snapshots
+from typocrawler.db.models import findings, readme_snapshots, repos
 
 _LOCKED = ("confirmed", "fixed")  # human/LLM verdicts the heuristic pass must not overwrite
+_VERDICT_STATUS = {"typo": "confirmed", "not_typo": "false_positive"}  # "unsure" -> stays "new"
 
 
 def snapshots_to_check(conn: Connection, *, limit: int | None = None):
@@ -122,3 +123,53 @@ def reclassify(conn: Connection, allowlist: set[str]) -> Counter[str]:
             )
         )
     return outcomes
+
+
+def findings_to_verify(conn: Connection, *, limit: int | None = None):
+    """Survivors of the heuristics that have no LLM verdict yet, best candidates first."""
+    stmt = (
+        select(
+            findings.c.id,
+            findings.c.token,
+            findings.c.suggestion,
+            findings.c.context_snippet,
+            repos.c.full_name,
+        )
+        .select_from(findings.join(repos, findings.c.repo_id == repos.c.id))
+        .where(findings.c.status == "new", findings.c.llm_verdict.is_(None))
+        .order_by(findings.c.heuristic_score.desc(), findings.c.id)
+    )
+    if limit:
+        stmt = stmt.limit(limit)
+    return conn.execute(stmt).all()
+
+
+def reset_verdicts(conn: Connection) -> int:
+    """Clear every LLM verdict, sending confirmed/false-positive-by-LLM rows back to ``new``.
+
+    Heuristic rejections (``filter_reason`` set, no ``llm_verdict``) are left alone.
+    """
+    result = conn.execute(
+        update(findings)
+        .where(findings.c.llm_verdict.is_not(None))
+        .values(llm_verdict=None, llm_correction=None, status="new")
+    )
+    return result.rowcount
+
+
+def apply_verdicts(conn: Connection, updates: Sequence[tuple[int, str, str]]) -> Counter[str]:
+    """Write LLM verdicts. ``updates`` is ``(finding_id, verdict, correction)``.
+
+    ``typo`` -> ``confirmed``, ``not_typo`` -> ``false_positive``, ``unsure`` -> left ``new``.
+    """
+    counts: Counter[str] = Counter()
+    for finding_id, verdict, correction in updates:
+        values: dict[str, object] = {
+            "llm_verdict": verdict,
+            "llm_correction": correction or None,
+        }
+        if verdict in _VERDICT_STATUS:
+            values["status"] = _VERDICT_STATUS[verdict]
+        conn.execute(update(findings).where(findings.c.id == finding_id).values(**values))
+        counts[verdict] += 1
+    return counts
