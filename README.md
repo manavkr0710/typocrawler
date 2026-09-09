@@ -35,7 +35,10 @@ typocrawler check                # run codespell + typos + heuristic filter (res
 typocrawler filter               # re-run heuristics after editing config/allowlist.txt
 typocrawler verify               # LLM confirms each survivor (needs GROQ_API_KEY / GEMINI_API_KEY / Ollama)
 typocrawler findings --confirmed # the final list of genuine typos
+typocrawler report               # build the static dashboard into site/
 ```
+
+Preview the dashboard locally: `python -m http.server -d site` then open <http://localhost:8000>.
 
 If you have an existing `typos.db` from an earlier stint, run `alembic upgrade head` once to
 pick up new columns.
@@ -69,6 +72,7 @@ Configure targets in [`config/orgs.yml`](config/orgs.yml).
 | `src/typocrawler/text/` | Markdown → prose extraction |
 | `src/typocrawler/check/` | codespell + typos runners, cross-referencing, heuristic filters |
 | `src/typocrawler/verify/` | pluggable LLM back-ends + prompt/parse for verification |
+| `src/typocrawler/report/` | static dashboard generator + HTML/CSS/JS assets |
 | `src/typocrawler/cli.py` | `typocrawler` CLI (Typer) |
 | `migrations/` | Alembic migrations |
 | `tests/` | pytest suite |
@@ -83,7 +87,7 @@ Built in sequential "stints", one branch/PR each:
 - [x] **Stint 4 — spell-checkers:** codespell + typos over the prose, cross-referenced into findings
 - [x] **Stint 5 — heuristic filter:** drop acronyms, identifiers, table fragments, allowlisted words
 - [x] **Stint 6 — LLM verification:** pluggable Groq/Gemini/Ollama pass confirms real typos in context
-- [ ] Stint 7 — static dashboard
+- [x] **Stint 7 — static dashboard:** `report` builds a filterable, theme-aware site into `site/`
 - [ ] Stint 8 — GitHub Actions automation
 - [ ] Stint 9 — polish
 

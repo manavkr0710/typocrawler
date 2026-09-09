@@ -39,9 +39,40 @@ def test_orgs_lists_targets():
 
 
 def test_stubbed_command_exits_nonzero():
-    result = runner.invoke(app, ["report"])
-    assert result.exit_code == 1
-    assert "stint 7" in result.stdout
+    result = runner.invoke(app, ["check", "--db", "does-not-matter", "--help"])
+    assert result.exit_code == 0  # all pipeline commands are implemented now
+
+
+def test_report_builds_a_site(tmp_path):
+    db = tmp_path / "typos.db"
+    engine = init_db(db)
+    with engine.begin() as conn:
+        org_id = upsert_org(conn, "acme")
+        upsert_repos(conn, org_id, [RepoRecord("acme/widgets", "main", 9, False, False, None)])
+        repo_id = conn.execute(
+            select(repos_table.c.id).where(repos_table.c.full_name == "acme/widgets")
+        ).scalar_one()
+        conn.execute(
+            findings.insert().values(
+                repo_id=repo_id,
+                blob_sha="s",
+                line_no=3,
+                token="recieve",
+                suggestion="receive",
+                context_snippet="you recieve it",
+                source="both",
+                heuristic_score=2,
+                status="confirmed",
+                llm_verdict="typo",
+            )
+        )
+
+    out = tmp_path / "site"
+    result = runner.invoke(app, ["report", "--db", str(db), "--out", str(out)])
+    assert result.exit_code == 0, result.stdout
+    assert "1 confirmed" in result.stdout
+    assert (out / "index.html").is_file()
+    assert "recieve" in (out / "data" / "findings.json").read_text(encoding="utf-8")
 
 
 def test_discover_requires_a_token(tmp_path, monkeypatch):

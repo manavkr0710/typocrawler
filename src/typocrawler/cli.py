@@ -37,6 +37,7 @@ from typocrawler.db.snapshot_store import repos_needing_readme, save_readme_snap
 from typocrawler.github.client import GitHubClient, GitHubError, GitHubRateLimitError
 from typocrawler.github.discover import iter_org_repos, should_keep
 from typocrawler.github.fetch import fetch_readme
+from typocrawler.report import build_site
 from typocrawler.text.extract import extract_lines, extract_prose
 from typocrawler.verify.llm import get_verifier
 from typocrawler.verify.prompt import VerifyItem
@@ -519,11 +520,17 @@ def verify(
 
 @app.command()
 def report(
-    db: str = typer.Option(str(DEFAULT_DB_PATH)),
+    db: str = typer.Option(str(DEFAULT_DB_PATH), help="SQLite file to read."),
     out: str = typer.Option("site", help="Output directory for the static site."),
 ) -> None:
-    """Build the static dashboard."""
-    _not_yet("report", 7)
+    """Build the static dashboard into OUT/ (data JSON + assets)."""
+    engine = init_db(db)
+    meta = build_site(engine, Path(out))
+    typer.secho(
+        f"built {out}/index.html — {meta['confirmed']} confirmed, "
+        f"{meta['unverified']} unverified, {meta['unsure']} unsure",
+        fg=typer.colors.GREEN,
+    )
 
 
 if __name__ == "__main__":

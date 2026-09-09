@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Typos in Big Tech READMEs</title>
+<meta name="description" content="A crawler that reads the public READMEs of Google, Microsoft, Meta, AWS and friends, and lists the genuine spelling mistakes it finds.">
+<meta property="og:title" content="Typos in Big Tech READMEs">
+<meta property="og:description" content="Genuine spelling mistakes found in the open-source READMEs of large tech orgs.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">an automated crawl of big-tech open source</p>
+    <h1>Typos hiding in the READMEs<br>of <span class="accent">Big Tech</span></h1>
+    <p class="lede">
+      Every night a crawler reads the public READMEs of Google, Microsoft, Meta, AWS,
+      Netflix, Apple and Kubernetes, runs two spell-checkers over the prose, filters the
+      noise, and asks a language model to confirm each remaining word is really misspelled.
+      What's left is below.
+    </p>
+
+    <dl class="stats">
+      <div><dd id="s-confirmed" data-count>0</dd><dt>confirmed typos</dt></div>
+      <div><dd id="s-repos" data-count>0</dd><dt>repositories</dt></div>
+      <div><dd id="s-orgs" data-count>0</dd><dt>organisations</dt></div>
+      <div><dd id="s-scanned" data-count>0</dd><dt>READMEs scanned</dt></div>
+    </dl>
+  </header>
+
+  <section class="controls" aria-label="Filters">
+    <input type="search" id="q" placeholder="Search a word, repo, or context…" autocomplete="off" spellcheck="false">
+    <div class="chips" id="orgChips"></div>
+    <div class="toggles">
+      <label class="toggle">
+        <input type="checkbox" id="bothOnly">
+        <span>both checkers agree</span>
+      </label>
+      <label class="toggle">
+        <input type="checkbox" id="showPending">
+        <span id="pendingLabel">include unverified candidates</span>
+      </label>
+    </div>
+  </section>
+
+  <main>
+    <p class="count" id="count"></p>
+    <div class="table-scroll">
+      <table id="table">
+        <thead>
+          <tr><th>Repository</th><th>Typo</th><th class="ctx-col">In context</th><th aria-label="link"></th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <button id="showMore" class="show-more" hidden></button>
+    <p class="empty" id="empty" hidden>Nothing matches that filter.</p>
+  </main>
+
+  <section class="cta">
+    <p>The crawl re-runs every night — new typos surface as big-tech projects ship docs.</p>
+    <a class="cta-btn" href="https://github.com/manavkr0710/opensource-readme-typo-crawler" target="_blank" rel="noopener">★ Star / watch the repo on GitHub</a>
+  </section>
+
+  <section class="asides">
+    <div class="aside">
+      <h2>Most common mistakes</h2>
+      <ol id="topTypos" class="top-list"></ol>
+    </div>
+    <div class="aside">
+      <h2>By organisation</h2>
+      <ul id="byOrg" class="bar-list"></ul>
+    </div>
+  </section>
+
+  <footer>
+    <p>Rebuilt <span id="generated">—</span>. Data:
+      <a href="data/findings.json">findings.json</a> ·
+      <a href="https://github.com/manavkr0710/opensource-readme-typo-crawler">source &amp; method</a>
+    </p>
+    <p class="fine">
+      Candidates come from <code>codespell</code> + <code>typos</code>, are filtered by
+      heuristics (acronyms, code, allowlists), then confirmed by an LLM in context.
+      Suggested fixes are the spell-checkers' — sanity-check before sending a PR.
+    </p>
+  </footer>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
