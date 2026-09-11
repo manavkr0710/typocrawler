@@ -21,16 +21,12 @@ survivors are sent to an LLM for a context check, which keeps the noise, and the
 * **Data layer:** **SQLAlchemy Core** + **Alembic** migrations over **SQLite**
 * **GitHub integration:** **httpx** + **tenacity**, GitHub **GraphQL** (repo discovery) and **REST** (README fetch, ETag-cached)
 * **Text processing:** **markdown-it-py** for extraction, **codespell** + **typos** for spell-checking
-* **LLM verification:** pluggable backends (Groq / Gemini / Ollama) — local **Ollama** (`qwen2.5:7b`) ran the initial bulk verification, **Gemini** runs the nightly incremental automation*
+* **LLM verification:** pluggable backends (Groq / Gemini / Ollama), local **Ollama** (`qwen2.5:7b`) ran the initial bulk verification, **Gemini** runs the nightly incremental automation*
 * **Dashboard:** vanilla **HTML / CSS / JS**, no framework, no build step
 * **CI/CD & hosting:** **GitHub Actions** (nightly cron) deploying to **GitHub Pages**
 * **Testing:** **pytest** + **ruff**
 
 
-**Python** · **SQLAlchemy Core** + **Alembic** (SQLite) · **Typer** CLI · GitHub **GraphQL/REST**
-API (`httpx` + `tenacity`) · `markdown-it-py` · `codespell` + `typos` · pluggable **LLM
-verification** (Groq / Gemini / Ollama) · vanilla **HTML/CSS/JS** dashboard, no framework ·
-**GitHub Actions** + **GitHub Pages** · `pytest` + `ruff`
 
 ## System Diagrams (C1-C3)
 
