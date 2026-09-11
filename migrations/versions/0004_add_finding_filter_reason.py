@@ -23,10 +23,18 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("findings") as batch:
-        batch.add_column(sa.Column("filter_reason", sa.String(), nullable=True))
+    # Guard against "duplicate column" on a from-scratch db, whose 0001 already creates this
+    # column since create_all uses the current models.py.
+    bind = op.get_bind()
+    cols = {c["name"] for c in sa.inspect(bind).get_columns("findings")}
+    if "filter_reason" not in cols:
+        with op.batch_alter_table("findings") as batch:
+            batch.add_column(sa.Column("filter_reason", sa.String(), nullable=True))
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("findings") as batch:
-        batch.drop_column("filter_reason")
+    bind = op.get_bind()
+    cols = {c["name"] for c in sa.inspect(bind).get_columns("findings")}
+    if "filter_reason" in cols:
+        with op.batch_alter_table("findings") as batch:
+            batch.drop_column("filter_reason")

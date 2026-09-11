@@ -23,10 +23,21 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("repos") as batch:
-        batch.add_column(sa.Column("readme_checked_at", sa.DateTime(timezone=True), nullable=True))
+    # A from-scratch database's 0001 already creates this column (create_all uses the current
+    # models.py), so guard against "duplicate column" on a fresh db while still adding it for a
+    # pre-existing one that predates this migration.
+    bind = op.get_bind()
+    cols = {c["name"] for c in sa.inspect(bind).get_columns("repos")}
+    if "readme_checked_at" not in cols:
+        with op.batch_alter_table("repos") as batch:
+            batch.add_column(
+                sa.Column("readme_checked_at", sa.DateTime(timezone=True), nullable=True)
+            )
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("repos") as batch:
-        batch.drop_column("readme_checked_at")
+    bind = op.get_bind()
+    cols = {c["name"] for c in sa.inspect(bind).get_columns("repos")}
+    if "readme_checked_at" in cols:
+        with op.batch_alter_table("repos") as batch:
+            batch.drop_column("readme_checked_at")
