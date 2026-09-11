@@ -1,11 +1,8 @@
-# opensource-readme-typo-crawler
+# Typo Crawler
 
 A crawler that reads the public READMEs of large open-source orgs, such as `google`, `facebook`,
 `microsoft`, `aws` and friends, hunts for genuine typos, verifies them, and publishes the
 findings to a static dashboard.
-
-Design goal: **run the whole thing on free tiers.** No server, no managed database, no paid API.
-A nightly GitHub Actions job builds a SQLite file and a static site, and GitHub Pages serves it.
 
 ## How it works
 One CLI, six checkpointed stages. A rate limit or a CI timeout just means the next run resumes.
@@ -21,16 +18,12 @@ survivors are sent to an LLM for a context check, which keeps the noise, and the
 * **Data layer:** **SQLAlchemy Core** + **Alembic** migrations over **SQLite**
 * **GitHub integration:** **httpx** + **tenacity**, GitHub **GraphQL** (repo discovery) and **REST** (README fetch, ETag-cached)
 * **Text processing:** **markdown-it-py** for extraction, **codespell** + **typos** for spell-checking
-* **LLM verification:** pluggable backends (Groq / Gemini / Ollama) — local **Ollama** (`qwen2.5:7b`) ran the initial bulk verification, **Gemini** runs the nightly incremental automation*
+* **LLM verification:** pluggable backends (Groq / Gemini / Ollama), local **Ollama** (`qwen2.5:7b`) ran the initial bulk verification, **Gemini** runs the nightly incremental automation*
 * **Dashboard:** vanilla **HTML / CSS / JS**, no framework, no build step
 * **CI/CD & hosting:** **GitHub Actions** (nightly cron) deploying to **GitHub Pages**
 * **Testing:** **pytest** + **ruff**
 
 
-**Python** · **SQLAlchemy Core** + **Alembic** (SQLite) · **Typer** CLI · GitHub **GraphQL/REST**
-API (`httpx` + `tenacity`) · `markdown-it-py` · `codespell` + `typos` · pluggable **LLM
-verification** (Groq / Gemini / Ollama) · vanilla **HTML/CSS/JS** dashboard, no framework ·
-**GitHub Actions** + **GitHub Pages** · `pytest` + `ruff`
 
 ## System Diagrams (C1-C3)
 
@@ -111,7 +104,7 @@ persists between runs.
 2. **Settings → Secrets and variables → Actions**, add:
    - `CRAWLER_GH_TOKEN` - a GitHub PAT with "Public Repositories (read-only)" access (same kind as your local `.env`'s `GITHUB_TOKEN`; the automatic `GITHUB_TOKEN` secret name is reserved by GitHub, hence the different name here)
    - `GEMINI_API_KEY` - from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-3. Trigger it once by hand: **Actions → Crawl and publish → Run workflow**, or just wait for the nightly schedule (07:11 UTC).
+3. Trigger it once by hand: **Actions → Crawl and publish → Run workflow**, or just wait for the nightly schedule.
 
 ## Project layout
 
