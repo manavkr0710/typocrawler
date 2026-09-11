@@ -61,6 +61,26 @@ access is enough — see [`.env.example`](.env.example).
 
 Configure targets in [`config/orgs.yml`](config/orgs.yml).
 
+## Automation (nightly crawl + GitHub Pages)
+
+[`.github/workflows/crawl.yml`](.github/workflows/crawl.yml) runs the whole pipeline
+(`discover → fetch → check → verify → report`) every night and publishes `site/` to GitHub
+Pages — free, no server. A big initial backlog (like the first full crawl) is still best run
+locally with Ollama; the nightly job is sized for small incremental deltas, verified via Gemini's
+free tier (~20 req/day is plenty once the backlog is cleared).
+
+**`typos.db` lives on a `data` branch**, not `main` — each run force-pushes a single fresh commit
+there instead of piling up binary diffs in the source history. The workflow restores it at the
+start of each run and re-saves it at the end, so progress (discovery, fetches, verify verdicts)
+persists between runs.
+
+**One-time setup:**
+1. **Settings → Pages → Build and deployment → Source → GitHub Actions.**
+2. **Settings → Secrets and variables → Actions**, add:
+   - `CRAWLER_GH_TOKEN` — a GitHub PAT with "Public Repositories (read-only)" access (same kind as your local `.env`'s `GITHUB_TOKEN`; the automatic `GITHUB_TOKEN` secret name is reserved by GitHub, hence the different name here)
+   - `GEMINI_API_KEY` — from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+3. Trigger it once by hand: **Actions → Crawl and publish → Run workflow** — or just wait for the nightly schedule (07:11 UTC).
+
 ## Project layout
 
 | Path | Purpose |
@@ -88,7 +108,7 @@ Built in sequential "stints", one branch/PR each:
 - [x] **Stint 5 — heuristic filter:** drop acronyms, identifiers, table fragments, allowlisted words
 - [x] **Stint 6 — LLM verification:** pluggable Groq/Gemini/Ollama pass confirms real typos in context
 - [x] **Stint 7 — static dashboard:** `report` builds a filterable, theme-aware site into `site/`
-- [ ] Stint 8 — GitHub Actions automation
+- [x] **Stint 8 — automation:** nightly GitHub Actions run + Pages deploy, `typos.db` persisted on a `data` branch
 - [ ] Stint 9 — polish
 
 ## License
