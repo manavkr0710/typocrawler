@@ -4,9 +4,6 @@ A crawler that reads the public READMEs of large open-source orgs, such as `goog
 `microsoft`, `aws` and friends, hunts for genuine typos, verifies them, and publishes the
 findings to a static dashboard.
 
-Design goal: **run the whole thing on free tiers.** No server, no managed database, no paid API.
-A nightly GitHub Actions job builds a SQLite file and a static site, and GitHub Pages serves it.
-
 ## How it works
 One CLI, six checkpointed stages. A rate limit or a CI timeout just means the next run resumes.
 
