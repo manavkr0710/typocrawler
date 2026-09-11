@@ -104,7 +104,7 @@ persists between runs.
 2. **Settings → Secrets and variables → Actions**, add:
    - `CRAWLER_GH_TOKEN` - a GitHub PAT with "Public Repositories (read-only)" access (same kind as your local `.env`'s `GITHUB_TOKEN`; the automatic `GITHUB_TOKEN` secret name is reserved by GitHub, hence the different name here)
    - `GEMINI_API_KEY` - from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-3. Trigger it once by hand: **Actions → Crawl and publish → Run workflow**, or just wait for the nightly schedule (07:11 UTC).
+3. Trigger it once by hand: **Actions → Crawl and publish → Run workflow**, or just wait for the nightly schedule.
 
 ## Project layout
 
