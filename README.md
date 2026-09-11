@@ -1,4 +1,4 @@
-# opensource-readme-typo-crawler
+# Typo Crawler
 
 A crawler that reads the public READMEs of large open-source orgs, such as `google`, `facebook`,
 `microsoft`, `aws` and friends, hunts for genuine typos, verifies them, and publishes the
