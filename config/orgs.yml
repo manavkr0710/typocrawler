@@ -10,6 +10,7 @@ defaults:
   extra_paths: []         # additional markdown files to scan later, e.g. ["CONTRIBUTING.md"]
 
 orgs:
+  # big tech
   - login: google
   - login: microsoft
   - login: facebook       # Meta
@@ -17,3 +18,29 @@ orgs:
   - login: kubernetes
   - login: netflix
   - login: apple
+
+  # mid-size tech — min_stars keeps the volume sane; drop it to scan everything
+  - login: stripe
+    min_stars: 10
+  - login: shopify
+    min_stars: 25
+  - login: cloudflare
+    min_stars: 15
+  - login: hashicorp
+    min_stars: 15
+  - login: elastic
+    min_stars: 20
+  - login: vercel
+    min_stars: 20
+  - login: supabase
+    min_stars: 15
+  - login: grafana
+    min_stars: 20
+  - login: getsentry     # Sentry
+    min_stars: 15
+  - login: mongodb
+    min_stars: 20
+  - login: gitlabhq      # GitLab
+    min_stars: 20
+  - login: DataDog
+    min_stars: 15
