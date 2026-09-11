@@ -1,0 +1,88 @@
+name: Crawl and publish
+
+on:
+  schedule:
+    - cron: "11 7 * * *" # nightly, off the hour to dodge the GitHub Actions rush
+  workflow_dispatch:
+    inputs:
+      fetch_limit:
+        description: "Max README fetches this run (0 = all remaining)"
+        default: "3000"
+
+permissions:
+  contents: write # push the data branch
+  pages: write # deploy the dashboard
+  id-token: write # required by actions/deploy-pages
+
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install typocrawler
+        run: pip install -e .
+
+      - name: Restore typos.db from the data branch
+        run: |
+          git fetch origin data 2>/dev/null || true
+          if git show origin/data:typos.db > typos.db 2>/dev/null; then
+            echo "restored existing typos.db ($(du -h typos.db | cut -f1))"
+          else
+            echo "no existing typos.db on the data branch — starting fresh"
+          fi
+
+      - name: Apply migrations (also bootstraps a fresh db)
+        run: alembic upgrade head
+
+      - name: Discover repos
+        run: typocrawler discover
+        env:
+          GITHUB_TOKEN: ${{ secrets.CRAWLER_GH_TOKEN }}
+
+      - name: Fetch READMEs
+        run: typocrawler fetch --limit "${{ github.event.inputs.fetch_limit || '3000' }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.CRAWLER_GH_TOKEN }}
+
+      - name: Spell-check + heuristics
+        run: typocrawler check
+
+      - name: LLM verification
+        run: typocrawler verify --provider gemini --batch 100
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        continue-on-error: true # a quota/rate-limit day shouldn't fail the whole run
+
+      - name: Build the dashboard
+        run: typocrawler report --out site
+
+      - name: Save typos.db to the data branch
+        run: |
+          git config user.name "typocrawler-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --orphan data-publish
+          git add -f typos.db
+          git commit -q -m "data: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -q -f origin data-publish:data
+
+      - name: Upload dashboard artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
