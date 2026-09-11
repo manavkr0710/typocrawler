@@ -8,9 +8,9 @@ Design goal: **run the whole thing on free tiers.** No server, no managed databa
 A nightly GitHub Actions job builds a SQLite file and a static site, and GitHub Pages serves it.
 
 ## How it works
+One CLI, six checkpointed stages. A rate limit or a CI timeout just means the next run resumes.
 
-<img width="1101" height="341" alt="image" src="https://github.com/user-attachments/assets/3d9b602e-69a4-4632-bcbc-fea558b3b806" />
-
+<img width="1021" height="263" alt="image" src="https://github.com/user-attachments/assets/c2ad5ce8-c96b-49ff-a333-b41b63c2570a" />
 
 Two independent spell-checkers (`codespell` + `typos`) feed a heuristic filter; only the few
 survivors are sent to an LLM for a context check, which keeps the noise, and the cost down.
