@@ -23,10 +23,18 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("readme_snapshots") as batch:
-        batch.add_column(sa.Column("checked_at", sa.DateTime(timezone=True), nullable=True))
+    # Guard against "duplicate column" on a from-scratch db, whose 0001 already creates this
+    # column since create_all uses the current models.py.
+    bind = op.get_bind()
+    cols = {c["name"] for c in sa.inspect(bind).get_columns("readme_snapshots")}
+    if "checked_at" not in cols:
+        with op.batch_alter_table("readme_snapshots") as batch:
+            batch.add_column(sa.Column("checked_at", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("readme_snapshots") as batch:
-        batch.drop_column("checked_at")
+    bind = op.get_bind()
+    cols = {c["name"] for c in sa.inspect(bind).get_columns("readme_snapshots")}
+    if "checked_at" in cols:
+        with op.batch_alter_table("readme_snapshots") as batch:
+            batch.drop_column("checked_at")
