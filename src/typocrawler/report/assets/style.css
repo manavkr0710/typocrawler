@@ -166,19 +166,30 @@ h1 .accent { color: var(--accent); font-style: italic; }
   letter-spacing: .04em;
   color: var(--muted);
 }
-.table-scroll { overflow-x: auto; }
+.table-scroll {
+  overflow: auto;
+  max-height: 60vh;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
 table {
   width: 100%;
   border-collapse: collapse;
   font-size: .94rem;
 }
 thead th {
-  padding: 0 16px 10px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 14px 16px 12px;
   text-align: left;
   font: 500 11px/1 "IBM Plex Mono", monospace;
   letter-spacing: .08em;
   text-transform: uppercase;
   color: var(--muted);
+  background: var(--surface);
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
 }
