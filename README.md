@@ -15,7 +15,17 @@ One CLI, six checkpointed stages. A rate limit or a CI timeout just means the ne
 Two independent spell-checkers (`codespell` + `typos`) feed a heuristic filter; only the few
 survivors are sent to an LLM for a context check, which keeps the noise, and the cost down.
 
-## Built with
+## Tech Stack
+
+* **Language:** **Python 3.12**, CLI built with **Typer**
+* **Data layer:** **SQLAlchemy Core** + **Alembic** migrations over **SQLite**
+* **GitHub integration:** **httpx** + **tenacity**, GitHub **GraphQL** (repo discovery) and **REST** (README fetch, ETag-cached)
+* **Text processing:** **markdown-it-py** for extraction, **codespell** + **typos** for spell-checking
+* **LLM verification:** pluggable backends (Groq / Gemini / Ollama) — local **Ollama** (`qwen2.5:7b`) ran the initial bulk verification, **Gemini** runs the nightly incremental automation*
+* **Dashboard:** vanilla **HTML / CSS / JS**, no framework, no build step
+* **CI/CD & hosting:** **GitHub Actions** (nightly cron) deploying to **GitHub Pages**
+* **Testing:** **pytest** + **ruff**
+
 
 **Python** · **SQLAlchemy Core** + **Alembic** (SQLite) · **Typer** CLI · GitHub **GraphQL/REST**
 API (`httpx` + `tenacity`) · `markdown-it-py` · `codespell` + `typos` · pluggable **LLM
