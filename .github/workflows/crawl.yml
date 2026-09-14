@@ -10,7 +10,7 @@ on:
         default: "3000"
 
 permissions:
-  contents: write # push the data branch
+  contents: write # manage the data-snapshot release (typos.db)
   pages: write # deploy the dashboard
   id-token: write # required by actions/deploy-pages
 
@@ -35,14 +35,15 @@ jobs:
       - name: Install typocrawler
         run: pip install -e .
 
-      - name: Restore typos.db from the data branch
+      - name: Restore typos.db from the data release
         run: |
-          git fetch origin data 2>/dev/null || true
-          if git show origin/data:typos.db > typos.db 2>/dev/null; then
+          if gh release download data-snapshot --pattern 'typos.db' --clobber 2>/dev/null; then
             echo "restored existing typos.db ($(du -h typos.db | cut -f1))"
           else
-            echo "no existing typos.db on the data branch — starting fresh"
+            echo "no existing typos.db release asset, starting fresh"
           fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Apply migrations (also bootstraps a fresh db)
         run: alembic upgrade head
@@ -69,14 +70,18 @@ jobs:
       - name: Build the dashboard
         run: typocrawler report --out site
 
-      - name: Save typos.db to the data branch
+      - name: Save typos.db to the data release
         run: |
-          git config user.name "typocrawler-bot"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch --orphan data-publish
-          git add -f typos.db
-          git commit -q -m "data: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push -q -f origin data-publish:data
+          if gh release view data-snapshot >/dev/null 2>&1; then
+            gh release upload data-snapshot typos.db --clobber
+          else
+            gh release create data-snapshot typos.db \
+              --title "typos.db snapshot" \
+              --notes "Working database for the nightly crawl. Not a software release, just persistent storage between CI runs; replaced every run."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true # a hiccup here shouldn't block publishing this run's dashboard
 
       - name: Upload dashboard artifact
         uses: actions/upload-pages-artifact@v3
