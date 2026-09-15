@@ -117,7 +117,7 @@ def discover(
     def _fetch(org):
         try:
             return org, list(iter_org_repos(client, org.login)), None
-        except GitHubError as exc:
+        except (GitHubError, httpx.HTTPStatusError, httpx.TransportError) as exc:
             return org, None, exc
 
     with client:

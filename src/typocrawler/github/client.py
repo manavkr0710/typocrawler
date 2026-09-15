@@ -83,7 +83,14 @@ class GitHubClient:
         """Run one GraphQL query and return its ``data`` object."""
         resp = self._client.post("/graphql", json={"query": query, "variables": variables or {}})
         resp.raise_for_status()
-        payload = resp.json()
+        if not resp.content:
+            # GitHub occasionally drops the body on an otherwise-2xx response; treat it as a
+            # transient network fault so it gets retried instead of crashing the whole run.
+            raise httpx.TransportError("empty response body from GitHub GraphQL API")
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise httpx.TransportError(f"malformed JSON from GitHub GraphQL API: {exc}") from exc
         if payload.get("errors"):
             raise GitHubError(str(payload["errors"]))
         data: dict[str, Any] = payload["data"]

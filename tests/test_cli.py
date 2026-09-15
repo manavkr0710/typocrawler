@@ -125,6 +125,30 @@ def test_discover_populates_the_database(tmp_path, monkeypatch):
     assert names == ["acme/widgets"]
 
 
+def test_discover_skips_one_failing_org_but_keeps_the_rest(tmp_path, monkeypatch):
+    # Regression: a transient network fault on one org (e.g. GitHub dropping the response
+    # body) used to crash the whole discover run instead of being skipped and reported.
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    config = tmp_path / "orgs.yml"
+    config.write_text("orgs:\n  - login: acme\n  - login: broken\n", encoding="utf-8")
+    db = tmp_path / "typos.db"
+
+    def fake_iter(client, login):
+        if login == "broken":
+            raise httpx.TransportError("empty response body from GitHub GraphQL API")
+        yield RepoRecord(f"{login}/widgets", "main", 5, False, False, None)
+
+    monkeypatch.setattr("typocrawler.cli.iter_org_repos", fake_iter)
+
+    result = runner.invoke(app, ["discover", "--config", str(config), "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+    assert "broken:" in result.stdout
+
+    with make_engine(db).connect() as conn:
+        names = [row[0] for row in conn.execute(select(repos_table.c.full_name))]
+    assert names == ["acme/widgets"]
+
+
 @respx.mock
 def test_fetch_stores_snapshot_and_extracted_prose(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "tok")

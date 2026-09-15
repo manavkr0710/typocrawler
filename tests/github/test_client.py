@@ -50,3 +50,32 @@ def test_query_retries_transient_server_errors_then_succeeds():
         data = client.query("query { ok }")
         assert data["ok"] is True
         assert route.call_count == 2
+
+
+@respx.mock
+def test_query_retries_a_2xx_response_with_an_empty_body():
+    # Seen in production: GitHub occasionally drops the body on an otherwise-200 response.
+    # That's not an HTTPStatusError, so it must be turned into something retryable, not a
+    # crash-the-whole-run JSONDecodeError.
+    route = respx.post("https://api.github.com/graphql")
+    route.side_effect = [
+        httpx.Response(200, content=b""),
+        httpx.Response(200, json={"data": {"ok": True}}),
+    ]
+    with GitHubClient("tok") as client:
+        data = client.query("query { ok }")
+        assert data["ok"] is True
+        assert route.call_count == 2
+
+
+@respx.mock
+def test_query_retries_malformed_json_then_succeeds():
+    route = respx.post("https://api.github.com/graphql")
+    route.side_effect = [
+        httpx.Response(200, content=b"not json"),
+        httpx.Response(200, json={"data": {"ok": True}}),
+    ]
+    with GitHubClient("tok") as client:
+        data = client.query("query { ok }")
+        assert data["ok"] is True
+        assert route.call_count == 2
