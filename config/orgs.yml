@@ -44,3 +44,22 @@ orgs:
     min_stars: 20
   - login: DataDog
     min_stars: 15
+  - login: uber
+  - login: twitter
+  - login: linkedin
+  - login: airbnb
+  - login: adobe
+  - login: salesforce
+  - login: spotify
+  - login: openai
+  - login: anthropics
+  - login: huggingface
+  - login: ibm
+  - login: RedHatOfficial
+  - login: oracle
+  - login: intel
+  - login: nvidia
+  - login: github
+  - login: docker
+  - login: alibaba
+  - login: tencent
