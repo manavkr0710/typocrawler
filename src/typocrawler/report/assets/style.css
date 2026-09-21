@@ -246,6 +246,13 @@ td { padding: 15px 16px; vertical-align: baseline; }
   white-space: nowrap;
 }
 .c-link a:hover { color: var(--accent); }
+.c-link .flag {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: .6;
+}
+.c-link .flag:hover { opacity: 1; }
 .empty { margin: 40px 0; color: var(--muted); }
 
 .show-more {

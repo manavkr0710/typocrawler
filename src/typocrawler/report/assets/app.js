@@ -34,6 +34,17 @@ function visible() {
   });
 }
 
+function reportURL(f) {
+  const params = new URLSearchParams({
+    template: "false-positive-report.yml",
+    title: `False positive: ${f.token} in ${f.repo}`,
+    repo: f.repo,
+    word: f.token,
+    context: f.context,
+  });
+  return `https://github.com/manavkr0710/typocrawler/issues/new?${params}`;
+}
+
 function rowHTML(f) {
   const badge =
     f.verdict === "confirmed" ? "" : `<span class="badge ${f.verdict}">${f.verdict}</span>`;
@@ -48,7 +59,10 @@ function rowHTML(f) {
     f.fix
   )}</span>${badge}</td>
     <td class="c-ctx">${highlight(f.context, f.token)}</td>
-    <td class="c-link"><a href="${esc(f.url)}" target="_blank" rel="noopener">line ${f.line} ↗</a></td>
+    <td class="c-link">
+      <a href="${esc(f.url)}" target="_blank" rel="noopener">line ${f.line} ↗</a>
+      <a class="flag" href="${esc(reportURL(f))}" target="_blank" rel="noopener">report inaccurate</a>
+    </td>
   </tr>`;
 }
 
